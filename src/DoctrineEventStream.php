@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace Wwwision\DCBEventStoreDoctrine;
@@ -14,6 +15,7 @@ use Wwwision\DCBEventStore\Model\EventId;
 use Wwwision\DCBEventStore\Model\EventType;
 use Wwwision\DCBEventStore\Model\SequenceNumber;
 use Traversable;
+
 use function is_numeric;
 
 final readonly class DoctrineEventStream implements EventStream
@@ -22,7 +24,8 @@ final readonly class DoctrineEventStream implements EventStream
         private QueryBuilder $queryBuilder,
         private ?SequenceNumber $minimumSequenceNumber,
         private ?int $limit,
-    ) {}
+    ) {
+    }
 
     public static function create(QueryBuilder $queryBuilder): self
     {

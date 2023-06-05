@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace Wwwision\DCBEventStoreDoctrine;
@@ -21,17 +22,19 @@ use Wwwision\DCBEventStore\Model\Events;
 use Wwwision\DCBEventStore\StreamQuery;
 use RuntimeException;
 use Webmozart\Assert\Assert;
+
 use function assert;
 use function json_encode;
+
 use const JSON_THROW_ON_ERROR;
 
 final readonly class DoctrineEventStore implements EventStore
 {
-
     private function __construct(
         private Connection $connection,
         private string $eventTableName,
-    ) {}
+    ) {
+    }
 
     public static function create(Connection $connection, string $eventTableName): self
     {
@@ -94,7 +97,7 @@ final readonly class DoctrineEventStore implements EventStore
             foreach ($query->domainIds as $key => $value) {
                 $domainIdentifierConstraints[] = 'JSON_EXTRACT(domain_ids, \'$.' . $key . '\') = :domainIdParam' . $domainIdParamIndex;
                 $queryBuilder->setParameter('domainIdParam' . $domainIdParamIndex, $value);
-                $domainIdParamIndex ++;
+                $domainIdParamIndex++;
             }
             $queryBuilder->andWhere($queryBuilder->expr()->or(...$domainIdentifierConstraints));
         }
@@ -108,7 +111,7 @@ final readonly class DoctrineEventStore implements EventStore
 
     public function conditionalAppend(Events $events, StreamQuery $query, ?EventId $lastEventId): void
     {
-        $this->writeEvents($events, function() use ($query, $lastEventId) {
+        $this->writeEvents($events, function () use ($query, $lastEventId) {
             $lastEvent = $this->stream($query)->last();
             if ($lastEvent === null) {
                 if ($lastEventId !== null) {
