@@ -19,7 +19,7 @@ use Wwwision\DCBEventStore\Exception\ConditionalAppendFailed;
 use Wwwision\DCBEventStore\Model\Event;
 use Wwwision\DCBEventStore\Model\EventId;
 use Wwwision\DCBEventStore\Model\Events;
-use Wwwision\DCBEventStore\StreamQuery;
+use Wwwision\DCBEventStore\Model\StreamQuery;
 use RuntimeException;
 use Webmozart\Assert\Assert;
 
