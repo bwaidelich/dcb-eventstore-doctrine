@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Wwwision\DCBEventStoreDoctrine;
 
-use Closure;
 use Doctrine\DBAL\ArrayParameterType;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Exception as DbalException;
@@ -16,6 +15,7 @@ use JsonException;
 use Wwwision\DCBEventStore\EventStore;
 use Wwwision\DCBEventStore\EventStream;
 use Wwwision\DCBEventStore\Exception\ConditionalAppendFailed;
+use Wwwision\DCBEventStore\Helper\InMemoryEventStream;
 use Wwwision\DCBEventStore\Model\Event;
 use Wwwision\DCBEventStore\Model\EventId;
 use Wwwision\DCBEventStore\Model\Events;
@@ -25,6 +25,7 @@ use Webmozart\Assert\Assert;
 
 use function assert;
 use function json_encode;
+use function sprintf;
 
 use const JSON_THROW_ON_ERROR;
 
@@ -82,11 +83,15 @@ final readonly class DoctrineEventStore implements EventStore
 
     public function stream(StreamQuery $query): EventStream
     {
-        $this->reconnectDatabaseConnection();
-        $queryBuilder = $this->connection->createQueryBuilder()
-            ->select('*')
-            ->from($this->eventTableName)
-            ->orderBy('sequence_number', 'ASC');
+        if ($query->matchesNone()) {
+            return InMemoryEventStream::empty();
+        }
+        try {
+            $this->reconnectDatabaseConnection();
+        } catch (DbalException $e) {
+            throw new RuntimeException(sprintf('Failed to reconnect database connection: %s', $e->getMessage()), 1686045084, $e);
+        }
+        $queryBuilder = $this->connection->createQueryBuilder()->select('*')->from($this->eventTableName)->orderBy('sequence_number', 'ASC');
 
         if ($query->types !== null) {
             $queryBuilder->andWhere('type IN (:eventTypes)')->setParameter('eventTypes', $query->types->toStringArray(), ArrayParameterType::STRING);
@@ -104,30 +109,7 @@ final readonly class DoctrineEventStore implements EventStore
         return DoctrineEventStream::create($queryBuilder);
     }
 
-    public function append(Events $events): void
-    {
-        $this->writeEvents($events);
-    }
-
-    public function conditionalAppend(Events $events, StreamQuery $query, ?EventId $lastEventId): void
-    {
-        $this->writeEvents($events, function () use ($query, $lastEventId) {
-            $lastEvent = $this->stream($query)->last();
-            if ($lastEvent === null) {
-                if ($lastEventId !== null) {
-                    throw ConditionalAppendFailed::becauseNoEventMatchedTheQuery();
-                }
-            } elseif ($lastEventId === null) {
-                throw ConditionalAppendFailed::becauseNoEventWhereExpected();
-            } elseif (!$lastEvent->event->id->equals($lastEventId)) {
-                throw ConditionalAppendFailed::becauseEventIdsDontMatch($lastEventId, $lastEvent->event->id);
-            }
-        });
-    }
-
-    // -------------------------------------
-
-    private function writeEvents(Events $events, Closure $condition = null): void
+    public function append(Events $events, StreamQuery $query, ?EventId $lastEventId): void
     {
         try {
             $this->reconnectDatabaseConnection();
@@ -140,8 +122,15 @@ final readonly class DoctrineEventStore implements EventStore
         } catch (DbalException $e) {
             throw new RuntimeException(sprintf('Failed to commit events because a database transaction could not be started: %s', $e->getMessage()), 1685956072, $e);
         }
-        if ($condition !== null) {
-            $condition();
+        $lastEvent = $this->stream($query)->last();
+        if ($lastEvent === null) {
+            if ($lastEventId !== null) {
+                throw ConditionalAppendFailed::becauseNoEventMatchedTheQuery();
+            }
+        } elseif ($lastEventId === null) {
+            throw ConditionalAppendFailed::becauseNoEventWhereExpected();
+        } elseif (!$lastEvent->event->id->equals($lastEventId)) {
+            throw ConditionalAppendFailed::becauseEventIdsDontMatch($lastEventId, $lastEvent->event->id);
         }
         try {
             foreach ($events as $event) {
@@ -159,18 +148,15 @@ final readonly class DoctrineEventStore implements EventStore
         }
     }
 
+    // -------------------------------------
+
     /**
      * @return array{id: string, type: string, data: string, domain_ids: string}
      * @throws JsonException
      */
     private static function eventToDatabaseRow(Event $event): array
     {
-        return [
-            'id' => $event->id->value,
-            'type' => $event->type->value,
-            'data' => $event->data->value,
-            'domain_ids' => json_encode($event->domainIds->jsonSerialize(), JSON_THROW_ON_ERROR),
-        ];
+        return ['id' => $event->id->value, 'type' => $event->type->value, 'data' => $event->data->value, 'domain_ids' => json_encode($event->domainIds->jsonSerialize(), JSON_THROW_ON_ERROR),];
     }
 
     /**
