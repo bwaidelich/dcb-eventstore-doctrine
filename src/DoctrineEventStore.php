@@ -4,29 +4,31 @@ declare(strict_types=1);
 
 namespace Wwwision\DCBEventStoreDoctrine;
 
-use Doctrine\DBAL\ArrayParameterType;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Exception as DbalException;
 use Doctrine\DBAL\Platforms\AbstractPlatform;
+use Doctrine\DBAL\Query\QueryBuilder;
 use Doctrine\DBAL\Schema\Schema;
 use Doctrine\DBAL\Schema\SchemaException;
 use Doctrine\DBAL\Types\Types;
 use JsonException;
+use RuntimeException;
+use Webmozart\Assert\Assert;
 use Wwwision\DCBEventStore\EventStore;
 use Wwwision\DCBEventStore\EventStream;
 use Wwwision\DCBEventStore\Exception\ConditionalAppendFailed;
 use Wwwision\DCBEventStore\Helper\InMemoryEventStream;
-use Wwwision\DCBEventStore\Model\Event;
 use Wwwision\DCBEventStore\Model\EventId;
 use Wwwision\DCBEventStore\Model\Events;
 use Wwwision\DCBEventStore\Model\StreamQuery;
-use RuntimeException;
-use Webmozart\Assert\Assert;
 
 use function assert;
+use function get_debug_type;
+use function implode;
 use function json_encode;
 use function sprintf;
 
+use const JSON_FORCE_OBJECT;
 use const JSON_THROW_ON_ERROR;
 
 final readonly class DoctrineEventStore implements EventStore
@@ -92,20 +94,7 @@ final readonly class DoctrineEventStore implements EventStore
             throw new RuntimeException(sprintf('Failed to reconnect database connection: %s', $e->getMessage()), 1686045084, $e);
         }
         $queryBuilder = $this->connection->createQueryBuilder()->select('*')->from($this->eventTableName)->orderBy('sequence_number', 'ASC');
-
-        if ($query->types !== null) {
-            $queryBuilder->andWhere('type IN (:eventTypes)')->setParameter('eventTypes', $query->types->toStringArray(), ArrayParameterType::STRING);
-        }
-        if ($query->domainIds !== null) {
-            $domainIdentifierConstraints = [];
-            $domainIdParamIndex = 0;
-            foreach ($query->domainIds as $key => $value) {
-                $domainIdentifierConstraints[] = 'JSON_EXTRACT(domain_ids, \'$.' . $key . '\') = :domainIdParam' . $domainIdParamIndex;
-                $queryBuilder->setParameter('domainIdParam' . $domainIdParamIndex, $value);
-                $domainIdParamIndex++;
-            }
-            $queryBuilder->andWhere($queryBuilder->expr()->or(...$domainIdentifierConstraints));
-        }
+        self::addStreamQueryConstraints($queryBuilder, $query);
         return DoctrineEventStream::create($queryBuilder);
     }
 
@@ -117,46 +106,77 @@ final readonly class DoctrineEventStore implements EventStore
             throw new RuntimeException(sprintf('Failed to commit events because database connection could not be reconnected: %s', $e->getMessage()), 1685956292, $e);
         }
         Assert::eq($this->connection->getTransactionNestingLevel(), 0, 'Failed to commit events because a database transaction is active already');
-        try {
-            $this->connection->beginTransaction();
-        } catch (DbalException $e) {
-            throw new RuntimeException(sprintf('Failed to commit events because a database transaction could not be started: %s', $e->getMessage()), 1685956072, $e);
-        }
-        $lastEvent = $this->stream($query)->last();
-        if ($lastEvent === null) {
-            if ($lastEventId !== null) {
-                throw ConditionalAppendFailed::becauseNoEventMatchedTheQuery();
-            }
-        } elseif ($lastEventId === null) {
-            throw ConditionalAppendFailed::becauseNoEventWhereExpected();
-        } elseif (!$lastEvent->event->id->equals($lastEventId)) {
-            throw ConditionalAppendFailed::becauseEventIdsDontMatch($lastEventId, $lastEvent->event->id);
-        }
-        try {
-            foreach ($events as $event) {
-                $this->connection->insert($this->eventTableName, self::eventToDatabaseRow($event));
-            }
-            $lastInsertId = $this->connection->lastInsertId();
-            Assert::numeric($lastInsertId, 'Failed to commit events because expected last insert id to be numeric, but it is: %s');
-            $this->connection->commit();
-        } catch (DbalException | JsonException $e) {
+
+        $parameters = [];
+        $selects = [];
+        $eventIndex = 0;
+        foreach ($events as $event) {
+            $selects[] = "SELECT :e{$eventIndex}_id, :e{$eventIndex}_type, :e{$eventIndex}_data, :e{$eventIndex}_domainIds";
             try {
-                $this->connection->rollBack();
-            } catch (DbalException $e) {
+                $domainIds = json_encode($event->domainIds, JSON_THROW_ON_ERROR | JSON_FORCE_OBJECT);
+            } catch (JsonException $e) {
+                throw new RuntimeException(sprintf('Failed to JSON encode domain ids: %s', $e->getMessage()), 1686304410, $e);
             }
+            $parameters['e' . $eventIndex . '_id'] = $event->id->value;
+            $parameters['e' . $eventIndex . '_type'] = $event->type->value;
+            $parameters['e' . $eventIndex . '_data'] = $event->data->value;
+            $parameters['e' . $eventIndex . '_domainIds'] = $domainIds;
+            $eventIndex++;
+        }
+        $unionSelects = implode(' UNION ALL ', $selects);
+
+        $queryBuilder = $this->connection->createQueryBuilder()->select('id')->from($this->eventTableName)->orderBy('sequence_number', 'DESC')->setMaxResults(1);
+        self::addStreamQueryConstraints($queryBuilder, $query);
+        $parameters = [...$parameters, ...$queryBuilder->getParameters()];
+        if ($lastEventId === null) {
+            $subQuery = 'NOT EXISTS (' . $queryBuilder->getSQL() . ')';
+        } else {
+            $subQuery = '(' . $queryBuilder->getSQL() . ') = :lastEventId';
+            $parameters['lastEventId'] = $lastEventId->value;
+        }
+
+        $statement =
+            <<<STATEMENT
+                INSERT INTO $this->eventTableName (id, type, data, domain_ids)
+                SELECT * FROM ( $unionSelects ) new_events
+                WHERE $subQuery
+            STATEMENT;
+        try {
+            $affectedRows = $this->connection->executeStatement($statement, $parameters);
+        } catch (DbalException $e) {
             throw new RuntimeException(sprintf('Failed to commit events: %s', $e->getMessage()), 1685956215, $e);
+        }
+        Assert::numeric($affectedRows, sprintf('Expected INSERT statement to return number of affected rows, but got a result of type %s', get_debug_type($affectedRows)));
+        if ((int)$affectedRows === 0) {
+            throw $lastEventId === null ? ConditionalAppendFailed::becauseNoEventWhereExpected() : ConditionalAppendFailed::becauseNoEventMatchedTheQuery();
         }
     }
 
     // -------------------------------------
 
-    /**
-     * @return array{id: string, type: string, data: string, domain_ids: string}
-     * @throws JsonException
-     */
-    private static function eventToDatabaseRow(Event $event): array
+    private static function addStreamQueryConstraints(QueryBuilder $queryBuilder, StreamQuery $streamQuery): void
     {
-        return ['id' => $event->id->value, 'type' => $event->type->value, 'data' => $event->data->value, 'domain_ids' => json_encode($event->domainIds->jsonSerialize(), JSON_THROW_ON_ERROR),];
+        if ($streamQuery->matchesNone()) {
+            $queryBuilder->andWhere('0');
+            return;
+        }
+        if ($streamQuery->types !== null) {
+            $queryBuilder->andWhere('type IN (:eventTypes)')
+                // NOTE: For some reason, the following does not seem to work: ->setParameter('eventTypes', $query->types->toStringArray(), ArrayParameterType::STRING)
+                ->setParameter('eventTypes', implode(',', $streamQuery->types->toStringArray()));
+        }
+        if ($streamQuery->domainIds !== null) {
+            $domainIdentifierConstraints = [];
+            $domainIdParamIndex = 0;
+            foreach ($streamQuery->domainIds as $key => $value) {
+                $domainIdentifierConstraints[] = 'JSON_EXTRACT(domain_ids, \'$.' . $key . '\') = :domainIdParam' . $domainIdParamIndex;
+                $queryBuilder->setParameter('domainIdParam' . $domainIdParamIndex, $value);
+                $domainIdParamIndex++;
+            }
+            if ($domainIdentifierConstraints !== []) {
+                $queryBuilder->andWhere($queryBuilder->expr()->or(...$domainIdentifierConstraints));
+            }
+        }
     }
 
     /**
