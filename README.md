@@ -9,3 +9,5 @@ Install via [composer](https://getcomposer.org):
 ```shell
 composer require wwwision/dcb-eventstore-doctrine
 ```
+
+CI test
