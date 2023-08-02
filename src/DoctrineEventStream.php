@@ -37,6 +37,7 @@ final readonly class DoctrineEventStream implements EventStream
         if ($row === false) {
             return null;
         }
+        return null;
         return self::databaseRowToEventEnvelope($row);
     }
 
