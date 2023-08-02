@@ -22,9 +22,10 @@
   "require": {
     "php": ">=8.2",
     "ramsey/uuid": "^4.7",
+    "psr/clock": "^1",
     "webmozart/assert": "^1.11",
     "doctrine/dbal": "^3.6",
-    "wwwision/dcb-eventstore": "^1.1"
+    "wwwision/dcb-eventstore": "^2"
   },
   "require-dev": {
     "roave/security-advisories": "dev-latest",

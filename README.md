@@ -9,3 +9,11 @@ Install via [composer](https://getcomposer.org):
 ```shell
 composer require wwwision/dcb-eventstore-doctrine
 ```
+
+## Contribution
+
+Contributions in the form of [issues](https://github.com/bwaidelich/dcb-eventstore-doctrine/issues) or [pull requests](https://github.com/bwaidelich/dcb-eventstore-doctrine/pulls) are highly appreciated
+
+## License
+
+See [LICENSE](./LICENSE)
