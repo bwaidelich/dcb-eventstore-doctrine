@@ -99,7 +99,7 @@ final class DoctrineEventStore implements EventStore, Setupable
         $table->addColumn('type', Types::STRING, ['length' => 255]);
         // The event payload (usually serialized as JSON)
         $table->addColumn('data', Types::TEXT);
-        // The event domain identifiers as JSON
+        // The event tags as JSON
         $table->addColumn('tags', Types::JSON, ['platformOptions' => ['jsonb' => true]]);
         // When the event was appended originally
         $table->addColumn('recorded_at', Types::DATETIME_IMMUTABLE);
