@@ -250,12 +250,12 @@ final class DoctrineEventStore implements EventStore, Setupable
         $tagsParameterName = $this->createUniqueParameterName();
         $queryBuilder->setParameter($tagsParameterName, json_encode($tags));
         if ($this->isSQLite()) {
-            return "EXISTS(SELECT value FROM JSON_EACH($this->eventTableName.tags) WHERE value IN (SELECT value FROM JSON_EACH(:$tagsParameterName)))";
+            return "NOT EXISTS(SELECT value FROM JSON_EACH(:$tagsParameterName) WHERE value NOT IN (SELECT value FROM JSON_EACH($this->eventTableName.tags)))";
         }
         if ($this->isPostgreSQL()) {
-            return "EXISTS(SELECT value FROM jsonb_array_elements_text($this->eventTableName.tags) WHERE value IN (SELECT value FROM jsonb_array_elements_text(:$tagsParameterName::jsonb)))";
+            return "$this->eventTableName.tags @> :$tagsParameterName::jsonb";
         }
-        return "JSON_OVERLAPS(tags, :$tagsParameterName)";
+        return "JSON_CONTAINS(tags, :$tagsParameterName)";
     }
 
     private function eventTypeInStatement(QueryBuilder $queryBuilder, EventTypes $eventTypes): string
