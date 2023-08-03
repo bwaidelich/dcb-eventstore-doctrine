@@ -12,14 +12,39 @@ permissions:
 jobs:
   build:
 
+    strategy:
+      matrix:
+        php-versions: [ '8.1', '8.2', '8.3' ]
+
     runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:latest
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: false
+          MYSQL_ROOT_PASSWORD: password
+          MYSQL_DATABASE: dcb
+        ports:
+          - 3306/tcp
+        options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
+      postgres:
+        image: postgres:latest
+        env:
+          POSTGRES_USER: root
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: dcb
+        ports:
+          - 5432/tcp
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 3
 
     steps:
     - name: Setup PHP
       uses: shivammathur/setup-php@v2
       with:
-        php-version: '8.2'
-        
+        php-version: ${{ matrix.php-versions }}
+        extensions: pdo_mysql, pdo_sqlite, pdo_pgsql
+
     - name: Checkout code
       uses: actions/checkout@v3
 
@@ -38,5 +63,17 @@ jobs:
     - name: Install dependencies
       run: composer install --prefer-dist --no-progress
 
-    - name: Run test suite
+    - name: Run tests (SQLite)
       run: composer run-script test
+      env:
+        DCB_TEST_DSN: "pdo-sqlite:///events.sqlite"
+
+    - name: Run tests (MySQL)
+      run: composer run-script test
+      env:
+        DCB_TEST_DSN: "pdo-mysql://root:password@127.0.0.1:${{ job.services.mysql.ports['3306'] }}/dcb"
+
+    - name: Run tests (PostgreSQL)
+      run: composer run-script test
+      env:
+        DCB_TEST_DSN: "pdo-pgsql://root:password@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/dcb"

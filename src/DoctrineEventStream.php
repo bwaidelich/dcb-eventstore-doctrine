@@ -18,9 +18,9 @@ use Wwwision\DCBEventStore\Types\Tags;
 use function assert;
 use function is_numeric;
 
-final readonly class DoctrineEventStream implements EventStream
+final class DoctrineEventStream implements EventStream
 {
-    public function __construct(private Result $result)
+    public function __construct(private readonly Result $result)
     {
     }
 
