@@ -4,13 +4,14 @@ declare(strict_types=1);
 
 namespace Wwwision\DCBEventStoreDoctrine;
 
-use Doctrine\DBAL\ArrayParameterType;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Exception as DbalException;
 use Doctrine\DBAL\Platforms\AbstractPlatform;
-use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
+use Doctrine\DBAL\Platforms\PostgreSqlPlatform;
 use Doctrine\DBAL\Platforms\SqlitePlatform;
 use Doctrine\DBAL\Query\QueryBuilder;
+use Doctrine\DBAL\Result;
+use Doctrine\DBAL\Schema\Comparator;
 use Doctrine\DBAL\Schema\Schema;
 use Doctrine\DBAL\Schema\SchemaException;
 use Doctrine\DBAL\Types\Type;
@@ -36,6 +37,7 @@ use Wwwision\DCBEventStore\Types\StreamQuery\Criterion;
 use Wwwision\DCBEventStore\Types\StreamQuery\StreamQuery;
 use Wwwision\DCBEventStore\Types\Tags;
 
+use function assert;
 use function get_debug_type;
 use function implode;
 use function json_encode;
@@ -72,9 +74,11 @@ final class DoctrineEventStore implements EventStore, Setupable
     public function setup(): void
     {
         try {
-            $schemaManager = $this->connection->createSchemaManager();
+            $schemaManager = $this->connection->getSchemaManager();
+            assert($schemaManager !== null);
 
-            $schemaDiff = $schemaManager->createComparator()->compareSchemas($schemaManager->introspectSchema(), $this->databaseSchema());
+            //$schemaDiff = $schemaManager->createComparator()->compareSchemas($schemaManager->introspectSchema(), $this->databaseSchema());
+            $schemaDiff = (new Comparator())->compare($schemaManager->createSchema(), $this->databaseSchema());
             // TODO find replacement, @see https://github.com/doctrine/dbal/blob/3.6.x/UPGRADE.md#deprecated-schemadifftosql-and-schemadifftosavesql
             foreach ($schemaDiff->toSaveSql($this->platform) as $statement) {
                 $this->connection->executeStatement($statement);
@@ -116,7 +120,9 @@ final class DoctrineEventStore implements EventStore, Setupable
             $queryBuilder->andWhere('sequence_number >= :minimumSequenceNumber')->setParameter('minimumSequenceNumber', $from->value);
         }
         $this->addStreamQueryConstraints($queryBuilder, $query);
-        return new DoctrineEventStream($queryBuilder->executeQuery());
+        $result = $queryBuilder->execute();
+        assert($result instanceof Result);
+        return new DoctrineEventStream($result);
     }
 
     public function readBackwards(StreamQuery $query, ?SequenceNumber $from = null): EventStream
@@ -126,7 +132,9 @@ final class DoctrineEventStore implements EventStore, Setupable
             $queryBuilder->andWhere('sequence_number <= :maximumSequenceNumber')->setParameter('maximumSequenceNumber', $from->value);
         }
         $this->addStreamQueryConstraints($queryBuilder, $query);
-        return new DoctrineEventStream($queryBuilder->executeQuery());
+        $result = $queryBuilder->execute();
+        assert($result instanceof Result);
+        return new DoctrineEventStream($result);
     }
 
     public function append(Events $events, AppendCondition $condition): void
@@ -204,7 +212,7 @@ final class DoctrineEventStore implements EventStore, Setupable
                     } catch (Exception $e) {
                     }
                 }
-                if ((int)$e->getCode() !== 1213) {
+                if (!$e instanceof DbalException\ServerException || (int)$e->getErrorCode() !== 1213) {
                     throw new RuntimeException(sprintf('Failed to commit events: %s', $e->getMessage()), 1685956215, $e);
                 }
                 if ($retryAttempt >= $maxRetryAttempts) {
@@ -261,7 +269,7 @@ final class DoctrineEventStore implements EventStore, Setupable
     private function eventTypeInStatement(QueryBuilder $queryBuilder, EventTypes $eventTypes): string
     {
         $eventTypesParameterName = $this->createUniqueParameterName();
-        $queryBuilder->setParameter($eventTypesParameterName, $eventTypes->toStringArray(), ArrayParameterType::STRING);
+        $queryBuilder->setParameter($eventTypesParameterName, $eventTypes->toStringArray(), Connection::PARAM_STR_ARRAY);
         return "type IN (:$eventTypesParameterName)";
     }
 
