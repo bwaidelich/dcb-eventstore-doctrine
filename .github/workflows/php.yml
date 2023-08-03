@@ -14,17 +14,32 @@ jobs:
 
     runs-on: ubuntu-latest
 
+    services:
+      mysql:
+        image: mysql:latest
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: false
+          MYSQL_ROOT_PASSWORD: password
+          MYSQL_DATABASE: dcb
+        ports:
+          - 3306/tcp
+        options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
+
     steps:
     - name: Setup PHP
       uses: shivammathur/setup-php@v2
       with:
         php-version: '8.2'
-        
+        extensions: pdo_mysql, pdo_sqlite
+
     - name: Checkout code
       uses: actions/checkout@v3
 
     - name: Validate composer.json and composer.lock
       run: composer validate --strict
+
+#    - name: Start mysql service
+#      run: sudo systemctl start mysql.service
 
     - name: Cache Composer packages
       id: composer-cache
@@ -40,3 +55,6 @@ jobs:
 
     - name: Run test suite
       run: composer run-script test
+      env:
+        #DCB_TEST_DSN: "pdo-sqlite:///events.sqlite"
+        DCB_TEST_DSN: "mysql://root:password@127.0.0.1:${{ job.services.mysql.ports['3306'] }}/dcb"
