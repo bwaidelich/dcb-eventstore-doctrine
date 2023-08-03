@@ -12,6 +12,10 @@ permissions:
 jobs:
   build:
 
+    strategy:
+      matrix:
+        php-versions: [ '8.1', '8.2' ]
+
     runs-on: ubuntu-latest
 
     services:
@@ -38,7 +42,7 @@ jobs:
     - name: Setup PHP
       uses: shivammathur/setup-php@v2
       with:
-        php-version: '8.2'
+        php-version: ${{ matrix.php-versions }}
         extensions: pdo_mysql, pdo_sqlite, pdo_pgsql
 
     - name: Checkout code
@@ -46,9 +50,6 @@ jobs:
 
     - name: Validate composer.json and composer.lock
       run: composer validate --strict
-
-#    - name: Start mysql service
-#      run: sudo systemctl start mysql.service
 
     - name: Cache Composer packages
       id: composer-cache
@@ -62,9 +63,17 @@ jobs:
     - name: Install dependencies
       run: composer install --prefer-dist --no-progress
 
-    - name: Run test suite
+    - name: SQLite
       run: composer run-script test
       env:
-        #DCB_TEST_DSN: "pdo-sqlite:///events.sqlite"
-        #DCB_TEST_DSN: "pdo-mysql://root:password@127.0.0.1:${{ job.services.mysql.ports['3306'] }}/dcb"
+        DCB_TEST_DSN: "pdo-sqlite:///events.sqlite"
+
+    - name: MySQL
+      run: composer run-script test
+      env:
+        DCB_TEST_DSN: "pdo-mysql://root:password@127.0.0.1:${{ job.services.mysql.ports['3306'] }}/dcb"
+
+    - name: PostgreSQL
+      run: composer run-script test
+      env:
         DCB_TEST_DSN: "pdo-pgsql://root:password@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/dcb"
