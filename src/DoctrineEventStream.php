@@ -18,9 +18,6 @@ use Wwwision\DCBEventStore\Types\EventType;
 use Wwwision\DCBEventStore\Types\SequenceNumber;
 use Wwwision\DCBEventStore\Types\Tags;
 
-use function assert;
-use function is_numeric;
-
 final class DoctrineEventStream implements EventStream
 {
     public function __construct(private readonly Result $result)
@@ -62,7 +59,7 @@ final class DoctrineEventStream implements EventStream
                 EventType::fromString($row['type']),
                 EventData::fromString($row['data']),
                 Tags::fromJson($row['tags']),
-                EventMetadata::fromJson($row['metadata']),
+                $row['metadata'] === null ? EventMetadata::none() : EventMetadata::fromJson($row['metadata']),
             ),
         );
     }
