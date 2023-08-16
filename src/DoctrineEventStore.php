@@ -99,7 +99,9 @@ final class DoctrineEventStore implements EventStore, Setupable
         $table->addColumn('type', Types::STRING, ['length' => 255]);
         // The event payload (usually serialized as JSON)
         $table->addColumn('data', Types::TEXT);
-        // The event domain identifiers as JSON
+        // Optional event metadata as key-value pairs
+        $table->addColumn('metadata', Types::TEXT, ['platformOptions' => ['jsonb' => true]]);
+        // The event tags (aka domain ids) as JSON
         $table->addColumn('tags', Types::JSON, ['platformOptions' => ['jsonb' => true]]);
         // When the event was appended originally
         $table->addColumn('recorded_at', Types::DATETIME_IMMUTABLE);
@@ -142,7 +144,7 @@ final class DoctrineEventStore implements EventStore, Setupable
         $selects = [];
         $eventIndex = 0;
         foreach ($events as $event) {
-            $selects[] = "SELECT :e{$eventIndex}_id id, :e{$eventIndex}_type type, :e{$eventIndex}_data data, :e{$eventIndex}_tags" . ($this->isPostgreSQL() ? '::jsonb' : '') . " tags, :e{$eventIndex}_recordedAt" . ($this->isPostgreSQL() ? '::timestamp' : '') . " recorded_at";
+            $selects[] = "SELECT :e{$eventIndex}_id id, :e{$eventIndex}_type type, :e{$eventIndex}_data data, :e{$eventIndex}_metadata metadata, :e{$eventIndex}_tags" . ($this->isPostgreSQL() ? '::jsonb' : '') . " tags, :e{$eventIndex}_recordedAt" . ($this->isPostgreSQL() ? '::timestamp' : '') . " recorded_at";
             try {
                 $tags = json_encode($event->tags, JSON_THROW_ON_ERROR);
             } catch (JsonException $e) {
@@ -151,13 +153,14 @@ final class DoctrineEventStore implements EventStore, Setupable
             $parameters['e' . $eventIndex . '_id'] = $event->id->value;
             $parameters['e' . $eventIndex . '_type'] = $event->type->value;
             $parameters['e' . $eventIndex . '_data'] = $event->data->value;
+            $parameters['e' . $eventIndex . '_metadata'] = json_encode($event->metadata->value, JSON_THROW_ON_ERROR);
             $parameters['e' . $eventIndex . '_tags'] = $tags;
             $parameters['e' . $eventIndex . '_recordedAt'] = $this->clock->now()->format('Y-m-d H:i:s');
             $eventIndex++;
         }
         $unionSelects = implode(' UNION ALL ', $selects);
 
-        $statement = "INSERT INTO $this->eventTableName (id, type, data, tags, recorded_at) SELECT * FROM ( $unionSelects ) new_events";
+        $statement = "INSERT INTO $this->eventTableName (id, type, data, metadata, tags, recorded_at) SELECT * FROM ( $unionSelects ) new_events";
         $queryBuilder = null;
         if (!$condition->expectedHighestSequenceNumber->isAny()) {
             $queryBuilder = $this->connection->createQueryBuilder()->select('sequence_number')->from($this->eventTableName)->orderBy('sequence_number', 'DESC')->setMaxResults(1);

@@ -4,13 +4,16 @@ declare(strict_types=1);
 
 namespace Wwwision\DCBEventStoreDoctrine;
 
+use DateTimeImmutable;
 use Doctrine\DBAL\Result;
 use Traversable;
+use Webmozart\Assert\Assert;
 use Wwwision\DCBEventStore\EventStream;
 use Wwwision\DCBEventStore\Types\Event;
 use Wwwision\DCBEventStore\Types\EventData;
 use Wwwision\DCBEventStore\Types\EventEnvelope;
 use Wwwision\DCBEventStore\Types\EventId;
+use Wwwision\DCBEventStore\Types\EventMetadata;
 use Wwwision\DCBEventStore\Types\EventType;
 use Wwwision\DCBEventStore\Types\SequenceNumber;
 use Wwwision\DCBEventStore\Types\Tags;
@@ -48,14 +51,18 @@ final class DoctrineEventStream implements EventStream
      */
     private static function databaseRowToEventEnvelope(array $row): EventEnvelope
     {
-        assert(is_numeric($row['sequence_number']));
+        Assert::numeric($row['sequence_number']);
+        $recordedAt = DateTimeImmutable::createFromFormat('Y-m-d H:i:s', $row['recorded_at']);
+        Assert::isInstanceOf($recordedAt, DateTimeImmutable::class);
         return new EventEnvelope(
             SequenceNumber::fromInteger((int)$row['sequence_number']),
+            $recordedAt,
             new Event(
-                EventId::fromString($row['id'] ?? ''),
-                EventType::fromString($row['type'] ?? ''),
-                EventData::fromString($row['data'] ?? ''),
-                Tags::fromJson($row['tags'] ?? ''),
+                EventId::fromString($row['id']),
+                EventType::fromString($row['type']),
+                EventData::fromString($row['data']),
+                Tags::fromJson($row['tags']),
+                EventMetadata::fromJson($row['metadata']),
             ),
         );
     }
