@@ -25,7 +25,7 @@
     "psr/clock": "^1",
     "webmozart/assert": "^1.11",
     "doctrine/dbal": "^3.6",
-    "wwwision/dcb-eventstore": "^3"
+    "wwwision/dcb-eventstore": "@dev"
   },
   "require-dev": {
     "roave/security-advisories": "dev-latest",
@@ -47,8 +47,8 @@
   },
   "scripts": {
     "test-phpstan": "phpstan",
-    "test-cs": "phpcs --colors --standard=PSR12 --exclude=Generic.Files.LineLength src",
-    "test-cs:fix": "phpcbf --colors --standard=PSR12 --exclude=Generic.Files.LineLength src",
+    "test-cs": "phpcs --colors src",
+    "test-cs:fix": "phpcbf --colors src",
     "test-integration": "phpunit tests/Integration --exclude-group=parallel",
     "test-consistency": [
       "Wwwision\\DCBEventStoreDoctrine\\Tests\\Integration\\ConcurrencyTest::prepare",
