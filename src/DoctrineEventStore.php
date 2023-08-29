@@ -77,7 +77,6 @@ final class DoctrineEventStore implements EventStore, Setupable
             $schemaManager = $this->connection->getSchemaManager();
             assert($schemaManager !== null);
 
-            //$schemaDiff = $schemaManager->createComparator()->compareSchemas($schemaManager->introspectSchema(), $this->databaseSchema());
             $schemaDiff = (new Comparator())->compare($schemaManager->createSchema(), $this->databaseSchema());
             // TODO find replacement, @see https://github.com/doctrine/dbal/blob/3.6.x/UPGRADE.md#deprecated-schemadifftosql-and-schemadifftosavesql
             foreach ($schemaDiff->toSaveSql($this->platform) as $statement) {
