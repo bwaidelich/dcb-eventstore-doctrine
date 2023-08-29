@@ -46,21 +46,21 @@
     }
   },
   "scripts": {
-    "test-phpstan": "phpstan",
-    "test-cs": "phpcs --colors --standard=PSR12 --exclude=Generic.Files.LineLength src",
-    "test-cs:fix": "phpcbf --colors --standard=PSR12 --exclude=Generic.Files.LineLength src",
-    "test-integration": "phpunit tests/Integration --exclude-group=parallel",
-    "test-consistency": [
+    "test:phpstan": "phpstan",
+    "test:cs": "phpcs --colors src",
+    "test:cs:fix": "phpcbf --colors src",
+    "test:integration": "phpunit tests/Integration --exclude-group=parallel",
+    "test:consistency": [
       "Wwwision\\DCBEventStoreDoctrine\\Tests\\Integration\\ConcurrencyTest::prepare",
       "paratest tests/Integration --group=parallel --functional --processes 20",
       "Wwwision\\DCBEventStoreDoctrine\\Tests\\Integration\\ConcurrencyTest::validateEvents",
       "Wwwision\\DCBEventStoreDoctrine\\Tests\\Integration\\ConcurrencyTest::cleanup"
     ],
     "test": [
-      "@test-phpstan",
-      "@test-cs",
-      "@test-integration",
-      "@test-consistency"
+      "@test:phpstan",
+      "@test:cs",
+      "@test:integration",
+      "@test:consistency"
     ]
   }
 }
