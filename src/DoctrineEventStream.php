@@ -16,6 +16,7 @@ use Wwwision\DCBEventStore\Types\EventId;
 use Wwwision\DCBEventStore\Types\EventMetadata;
 use Wwwision\DCBEventStore\Types\EventType;
 use Wwwision\DCBEventStore\Types\SequenceNumber;
+use Wwwision\DCBEventStore\Types\StreamQuery\CriterionHashes;
 use Wwwision\DCBEventStore\Types\Tags;
 
 final class DoctrineEventStream implements EventStream
@@ -54,6 +55,7 @@ final class DoctrineEventStream implements EventStream
         return new EventEnvelope(
             SequenceNumber::fromInteger((int)$row['sequence_number']),
             $recordedAt,
+            $row['criterion_hashes'] === '' ? CriterionHashes::none() : CriterionHashes::fromArray(explode(',', $row['criterion_hashes'])),
             new Event(
                 EventId::fromString($row['id']),
                 EventType::fromString($row['type']),

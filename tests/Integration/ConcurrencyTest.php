@@ -41,7 +41,7 @@ final class ConcurrencyTest extends EventStoreConcurrencyTestBase
 
     public static function cleanup(): void
     {
-        self::connection()->executeStatement('DROP TABLE dcb_events_test');
+        //self::connection()->executeStatement('DROP TABLE dcb_events_test');
     }
 
     protected static function createEventStore(): EventStore
