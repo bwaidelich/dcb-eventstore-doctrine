@@ -25,8 +25,6 @@ final class CriterionImplementations
     public static function createDefault(): self
     {
         return self::create(
-            new EventTypesCriterionImplementation(),
-            new TagsCriterionImplementation(),
             new EventTypesAndTagsCriterionImplementation(),
         );
     }

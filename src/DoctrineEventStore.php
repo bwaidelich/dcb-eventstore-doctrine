@@ -8,7 +8,10 @@ use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Exception as DbalException;
 use Doctrine\DBAL\Exception\DeadlockException;
 use Doctrine\DBAL\Query\QueryBuilder;
+use Doctrine\DBAL\Result;
+use Doctrine\DBAL\Schema\Comparator;
 use Doctrine\DBAL\Schema\Schema;
+use Doctrine\DBAL\Schema\SchemaDiff;
 use Doctrine\DBAL\Schema\SchemaException;
 use Doctrine\DBAL\Types\Type;
 use Doctrine\DBAL\Types\Types;
@@ -21,8 +24,13 @@ use Wwwision\DCBEventStore\EventStream;
 use Wwwision\DCBEventStore\Exceptions\ConditionalAppendFailed;
 use Wwwision\DCBEventStore\Setupable;
 use Wwwision\DCBEventStore\Types\AppendCondition;
+use Wwwision\DCBEventStore\Types\Event;
+use Wwwision\DCBEventStore\Types\EventEnvelope;
+use Wwwision\DCBEventStore\Types\EventEnvelopes;
 use Wwwision\DCBEventStore\Types\Events;
 use Wwwision\DCBEventStore\Types\ReadOptions;
+use Wwwision\DCBEventStore\Types\SequenceNumber;
+use Wwwision\DCBEventStore\Types\StreamQuery\CriterionHashes;
 use Wwwision\DCBEventStore\Types\StreamQuery\StreamQuery;
 use function implode;
 use function json_encode;
@@ -46,16 +54,24 @@ final class DoctrineEventStore implements EventStore, Setupable
     public function setup(): void
     {
         try {
-            $schemaManager = $this->config->connection->createSchemaManager();
-
-            $schemaDiff = $schemaManager->createComparator()->compareSchemas($schemaManager->introspectSchema(), $this->databaseSchema());
             // TODO find replacement, @see https://github.com/doctrine/dbal/blob/3.6.x/UPGRADE.md#deprecated-schemadifftosql-and-schemadifftosavesql
-            foreach ($schemaDiff->toSaveSql($this->config->platform) as $statement) {
+            foreach ($this->getSchemaDiff()->toSaveSql($this->config->platform) as $statement) {
                 $this->config->connection->executeStatement($statement);
             }
         } catch (DbalException $e) {
             throw new RuntimeException(sprintf('Failed to setup event store: %s', $e->getMessage()), 1687010035, $e);
         }
+    }
+
+    private function getSchemaDiff(): SchemaDiff
+    {
+        if (method_exists($this->config->connection, 'createSchemaManager')) {
+            $schemaManager = $this->config->connection->createSchemaManager();
+            return $schemaManager->createComparator()->compareSchemas($schemaManager->introspectSchema(), $this->databaseSchema());
+        }
+        $schemaManager = $this->config->connection->getSchemaManager();
+        assert($schemaManager !== null);
+        return (new Comparator())->compare($schemaManager->createSchema(), $this->databaseSchema());
     }
 
     /**
@@ -100,7 +116,7 @@ final class DoctrineEventStore implements EventStore, Setupable
             $queryBuilder->andWhere('events.sequence_number ' . $operator . ' :minimumSequenceNumber')->setParameter('minimumSequenceNumber', $options->from->value);
         }
         $this->addStreamQueryConstraints($queryBuilder, $query);
-        return new DoctrineEventStream($queryBuilder->executeQuery());
+        return self::toEventStream($queryBuilder);
     }
 
     public function readAll(?ReadOptions $options = null): EventStream
@@ -114,7 +130,17 @@ final class DoctrineEventStore implements EventStore, Setupable
             $operator = $backwards ? '<=' : '>=';
             $queryBuilder->andWhere('events.sequence_number ' . $operator . ' :minimumSequenceNumber')->setParameter('minimumSequenceNumber', $options->from->value);
         }
-        return new DoctrineEventStream($queryBuilder->executeQuery());
+        return self::toEventStream($queryBuilder);
+    }
+
+    private static function toEventStream(QueryBuilder $queryBuilder): DoctrineEventStream
+    {
+        if (method_exists($queryBuilder, 'executeQuery')) {
+            return new DoctrineEventStream($queryBuilder->executeQuery());
+        }
+        $result = $queryBuilder->execute();
+        assert($result instanceof Result);
+        return new DoctrineEventStream($result);
     }
 
     public function append(Events $events, AppendCondition $condition): void
@@ -129,6 +155,7 @@ final class DoctrineEventStore implements EventStore, Setupable
         $parameters = [];
         $selects = [];
         $eventIndex = 0;
+        $now = $this->config->clock->now();
         foreach ($events as $event) {
             $selects[] = "SELECT :e{$eventIndex}_id id, :e{$eventIndex}_type type, :e{$eventIndex}_data data, :e{$eventIndex}_metadata metadata, :e{$eventIndex}_tags" . ($this->config->isPostgreSQL() ? '::jsonb' : '') . " tags, :e{$eventIndex}_recordedAt" . ($this->config->isPostgreSQL() ? '::timestamp' : '') . " recorded_at";
             try {
@@ -141,7 +168,7 @@ final class DoctrineEventStore implements EventStore, Setupable
             $parameters['e' . $eventIndex . '_data'] = $event->data->value;
             $parameters['e' . $eventIndex . '_metadata'] = json_encode($event->metadata->value, JSON_THROW_ON_ERROR);
             $parameters['e' . $eventIndex . '_tags'] = $tags;
-            $parameters['e' . $eventIndex . '_recordedAt'] = $this->config->clock->now()->format('Y-m-d H:i:s');
+            $parameters['e' . $eventIndex . '_recordedAt'] = $now->format('Y-m-d H:i:s');
             $eventIndex++;
         }
         $unionSelects = implode(' UNION ALL ', $selects);
@@ -205,6 +232,9 @@ final class DoctrineEventStore implements EventStore, Setupable
 
     private function addStreamQueryConstraints(QueryBuilder $queryBuilder, StreamQuery $streamQuery): void
     {
+        if ($streamQuery->isWildcard()) {
+            return;
+        }
         $this->config->resetUniqueParameterCount();
         $criterionStatements = [];
         $processedCriterionHashes = [];

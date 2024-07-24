@@ -24,7 +24,7 @@
     "ramsey/uuid": "^4.7",
     "psr/clock": "^1",
     "webmozart/assert": "^1.11",
-    "doctrine/dbal": "^3.6",
+    "doctrine/dbal": "^2.8 || ^3.6",
     "wwwision/dcb-eventstore": "@dev"
   },
   "require-dev": {
@@ -49,7 +49,10 @@
     "test:phpstan": "phpstan",
     "test:cs": "phpcs --colors src",
     "test:cs:fix": "phpcbf --colors src",
-    "test:integration": "phpunit tests/Integration --exclude-group=parallel",
+    "test:integration": [
+      "echo $DCB_TEST_DSN",
+      "phpunit tests/Integration --exclude-group=parallel"
+    ],
     "test:consistency": [
       "Wwwision\\DCBEventStoreDoctrine\\Tests\\Integration\\ConcurrencyTest::prepare",
       "paratest tests/Integration --group=parallel --functional --processes 20",
