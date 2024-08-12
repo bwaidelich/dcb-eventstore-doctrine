@@ -66,9 +66,9 @@ final class DoctrineEventStore implements EventStore, Setupable
         $this->clock = $clock ?? new SystemClock();
     }
 
-    public static function create(Connection $connection, string $eventTableName): self
+    public static function create(Connection $connection, string $eventTableName, ClockInterface $clock = null): self
     {
-        return new self($connection, $eventTableName);
+        return new self($connection, $eventTableName, $clock);
     }
 
     public function setup(): void
