@@ -4,84 +4,69 @@ declare(strict_types=1);
 
 namespace Wwwision\DCBEventStoreDoctrine;
 
-use Doctrine\DBAL\ArrayParameterType;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Exception as DbalException;
-use Doctrine\DBAL\Platforms\AbstractPlatform;
-use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
-use Doctrine\DBAL\Platforms\SqlitePlatform;
+use Doctrine\DBAL\Exception\DeadlockException;
 use Doctrine\DBAL\Query\QueryBuilder;
+use Doctrine\DBAL\Result;
+use Doctrine\DBAL\Schema\Comparator;
 use Doctrine\DBAL\Schema\Schema;
+use Doctrine\DBAL\Schema\SchemaDiff;
 use Doctrine\DBAL\Schema\SchemaException;
 use Doctrine\DBAL\Types\Type;
 use Doctrine\DBAL\Types\Types;
 use Exception;
 use JsonException;
-use Psr\Clock\ClockInterface;
 use RuntimeException;
 use Webmozart\Assert\Assert;
 use Wwwision\DCBEventStore\EventStore;
 use Wwwision\DCBEventStore\EventStream;
 use Wwwision\DCBEventStore\Exceptions\ConditionalAppendFailed;
-use Wwwision\DCBEventStore\Helpers\SystemClock;
 use Wwwision\DCBEventStore\Setupable;
 use Wwwision\DCBEventStore\Types\AppendCondition;
+use Wwwision\DCBEventStore\Types\Event;
+use Wwwision\DCBEventStore\Types\EventEnvelope;
+use Wwwision\DCBEventStore\Types\EventEnvelopes;
 use Wwwision\DCBEventStore\Types\Events;
-use Wwwision\DCBEventStore\Types\EventTypes;
+use Wwwision\DCBEventStore\Types\ReadOptions;
 use Wwwision\DCBEventStore\Types\SequenceNumber;
-use Wwwision\DCBEventStore\Types\StreamQuery\Criteria\EventTypesAndTagsCriterion;
-use Wwwision\DCBEventStore\Types\StreamQuery\Criteria\EventTypesCriterion;
-use Wwwision\DCBEventStore\Types\StreamQuery\Criteria\TagsCriterion;
-use Wwwision\DCBEventStore\Types\StreamQuery\Criterion;
+use Wwwision\DCBEventStore\Types\StreamQuery\CriterionHashes;
 use Wwwision\DCBEventStore\Types\StreamQuery\StreamQuery;
-use Wwwision\DCBEventStore\Types\Tags;
-
-use function get_debug_type;
 use function implode;
 use function json_encode;
 use function sprintf;
-use function usleep;
-
 use const JSON_THROW_ON_ERROR;
 
 final class DoctrineEventStore implements EventStore, Setupable
 {
-    private readonly AbstractPlatform $platform;
-    private readonly ClockInterface $clock;
 
-    private int $dynamicParameterCount = 0;
-
-    private function __construct(
-        private readonly Connection $connection,
-        private readonly string $eventTableName,
-        ClockInterface $clock = null,
+    public function __construct(
+        private readonly DoctrineEventStoreConfiguration $config
     ) {
-        try {
-            $this->platform = $this->connection->getDatabasePlatform();
-        } catch (DbalException $e) {
-            throw new RuntimeException(sprintf('Failed to determine Database platform from connection: %s', $e->getMessage()), 1687001448, $e);
-        }
-        $this->clock = $clock ?? new SystemClock();
     }
 
-    public static function create(Connection $connection, string $eventTableName): self
+    public static function create(Connection $connection, string $eventTableName, CriterionImplementations|null $criterionImplementations = null): self
     {
-        return new self($connection, $eventTableName);
+        $config = DoctrineEventStoreConfiguration::create($connection, $eventTableName, $criterionImplementations);
+        return new self($config);
     }
 
     public function setup(): void
     {
         try {
-            $schemaManager = $this->connection->createSchemaManager();
-
-            $schemaDiff = $schemaManager->createComparator()->compareSchemas($schemaManager->introspectSchema(), $this->databaseSchema());
             // TODO find replacement, @see https://github.com/doctrine/dbal/blob/3.6.x/UPGRADE.md#deprecated-schemadifftosql-and-schemadifftosavesql
-            foreach ($schemaDiff->toSaveSql($this->platform) as $statement) {
-                $this->connection->executeStatement($statement);
+            foreach ($this->getSchemaDiff()->toSaveSql($this->config->platform) as $statement) {
+                $this->config->connection->executeStatement($statement);
             }
         } catch (DbalException $e) {
             throw new RuntimeException(sprintf('Failed to setup event store: %s', $e->getMessage()), 1687010035, $e);
         }
+    }
+
+    private function getSchemaDiff(): SchemaDiff
+    {
+        $schemaManager = $this->config->connection->createSchemaManager();
+        return $schemaManager->createComparator()->compareSchemas($schemaManager->introspectSchema(), $this->databaseSchema());
     }
 
     /**
@@ -90,7 +75,7 @@ final class DoctrineEventStore implements EventStore, Setupable
     private function databaseSchema(): Schema
     {
         $schema = new Schema();
-        $table = $schema->createTable($this->eventTableName);
+        $table = $schema->createTable($this->config->eventTableName);
         // The monotonic sequence number
         $table->addColumn('sequence_number', Types::INTEGER, ['autoincrement' => true]);
         // The unique event id, usually a UUID
@@ -111,23 +96,35 @@ final class DoctrineEventStore implements EventStore, Setupable
         return $schema;
     }
 
-    public function read(StreamQuery $query, ?SequenceNumber $from = null): EventStream
+    public function read(StreamQuery $query, ?ReadOptions $options = null): EventStream
     {
-        $queryBuilder = $this->connection->createQueryBuilder()->select('*')->from($this->eventTableName)->orderBy('sequence_number', 'ASC');
-        if ($from !== null) {
-            $queryBuilder->andWhere('sequence_number >= :minimumSequenceNumber')->setParameter('minimumSequenceNumber', $from->value);
+        if ($query->isWildcard()) {
+            return $this->readAll($options);
+        }
+        $backwards = $options->backwards ?? false;
+        $queryBuilder = $this->config->connection->createQueryBuilder()
+            ->select('events.*, criterion_hashes')
+            ->from($this->config->eventTableName, 'events')
+            ->orderBy('events.sequence_number', $backwards ? 'DESC' : 'ASC');
+        if ($options !== null && $options->from !== null) {
+            $operator = $backwards ? '<=' : '>=';
+            $queryBuilder->andWhere('events.sequence_number ' . $operator . ' :minimumSequenceNumber')->setParameter('minimumSequenceNumber', $options->from->value);
         }
         $this->addStreamQueryConstraints($queryBuilder, $query);
         return new DoctrineEventStream($queryBuilder->executeQuery());
     }
 
-    public function readBackwards(StreamQuery $query, ?SequenceNumber $from = null): EventStream
+    public function readAll(?ReadOptions $options = null): EventStream
     {
-        $queryBuilder = $this->connection->createQueryBuilder()->select('*')->from($this->eventTableName)->orderBy('sequence_number', 'DESC');
-        if ($from !== null) {
-            $queryBuilder->andWhere('sequence_number <= :maximumSequenceNumber')->setParameter('maximumSequenceNumber', $from->value);
+        $backwards = $options->backwards ?? false;
+        $queryBuilder = $this->config->connection->createQueryBuilder()
+            ->select('events.*, \'\' AS criterion_hashes')
+            ->from($this->config->eventTableName, 'events')
+            ->orderBy('events.sequence_number', $backwards ? 'DESC' : 'ASC');
+        if ($options !== null && $options->from !== null) {
+            $operator = $backwards ? '<=' : '>=';
+            $queryBuilder->andWhere('events.sequence_number ' . $operator . ' :minimumSequenceNumber')->setParameter('minimumSequenceNumber', $options->from->value);
         }
-        $this->addStreamQueryConstraints($queryBuilder, $query);
         return new DoctrineEventStream($queryBuilder->executeQuery());
     }
 
@@ -138,13 +135,14 @@ final class DoctrineEventStore implements EventStore, Setupable
         } catch (DbalException $e) {
             throw new RuntimeException(sprintf('Failed to commit events because database connection could not be reconnected: %s', $e->getMessage()), 1685956292, $e);
         }
-        Assert::eq($this->connection->getTransactionNestingLevel(), 0, 'Failed to commit events because a database transaction is active already');
+        Assert::eq($this->config->connection->getTransactionNestingLevel(), 0, 'Failed to commit events because a database transaction is active already');
 
         $parameters = [];
         $selects = [];
         $eventIndex = 0;
+        $now = $this->config->clock->now();
         foreach ($events as $event) {
-            $selects[] = "SELECT :e{$eventIndex}_id id, :e{$eventIndex}_type type, :e{$eventIndex}_data data, :e{$eventIndex}_metadata metadata, :e{$eventIndex}_tags" . ($this->isPostgreSQL() ? '::jsonb' : '') . " tags, :e{$eventIndex}_recordedAt" . ($this->isPostgreSQL() ? '::timestamp' : '') . " recorded_at";
+            $selects[] = "SELECT :e{$eventIndex}_id id, :e{$eventIndex}_type type, :e{$eventIndex}_data data, :e{$eventIndex}_metadata metadata, :e{$eventIndex}_tags" . ($this->config->isPostgreSQL() ? '::jsonb' : '') . " tags, :e{$eventIndex}_recordedAt" . ($this->config->isPostgreSQL() ? '::timestamp' : '') . " recorded_at";
             try {
                 $tags = json_encode($event->tags, JSON_THROW_ON_ERROR);
             } catch (JsonException $e) {
@@ -155,33 +153,34 @@ final class DoctrineEventStore implements EventStore, Setupable
             $parameters['e' . $eventIndex . '_data'] = $event->data->value;
             $parameters['e' . $eventIndex . '_metadata'] = json_encode($event->metadata->value, JSON_THROW_ON_ERROR);
             $parameters['e' . $eventIndex . '_tags'] = $tags;
-            $parameters['e' . $eventIndex . '_recordedAt'] = $this->clock->now()->format('Y-m-d H:i:s');
+            $parameters['e' . $eventIndex . '_recordedAt'] = $now->format('Y-m-d H:i:s');
             $eventIndex++;
         }
         $unionSelects = implode(' UNION ALL ', $selects);
 
-        $statement = "INSERT INTO $this->eventTableName (id, type, data, metadata, tags, recorded_at) SELECT * FROM ( $unionSelects ) new_events";
+        $statement = "INSERT INTO {$this->config->eventTableName} (id, type, data, metadata, tags, recorded_at) SELECT * FROM ( $unionSelects ) new_events";
         $queryBuilder = null;
         if (!$condition->expectedHighestSequenceNumber->isAny()) {
-            $queryBuilder = $this->connection->createQueryBuilder()->select('sequence_number')->from($this->eventTableName)->orderBy('sequence_number', 'DESC')->setMaxResults(1);
+            $queryBuilder = $this->config->connection->createQueryBuilder()->select('events.sequence_number')->from($this->config->eventTableName, 'events')->orderBy('events.sequence_number', 'DESC')->setMaxResults(1);
             $this->addStreamQueryConstraints($queryBuilder, $condition->query);
             $parameters = [...$parameters, ...$queryBuilder->getParameters()];
             if ($condition->expectedHighestSequenceNumber->isNone()) {
-                $subQuery = 'NOT EXISTS (' . $queryBuilder->getSQL() . ')';
+                $statement .= ' WHERE NOT EXISTS (' . $queryBuilder->getSQL() . ')';
             } else {
-                $subQuery = '(' . $queryBuilder->getSQL() . ') = :highestSequenceNumber';
+                $statement .= ' WHERE (' . $queryBuilder->getSQL() . ') = :highestSequenceNumber';
                 $parameters['highestSequenceNumber'] = $condition->expectedHighestSequenceNumber->extractSequenceNumber()->value;
             }
-            $statement .= " WHERE $subQuery";
         }
         $affectedRows = $this->commitStatement($statement, $parameters, $queryBuilder?->getParameterTypes() ?? []);
         if ($affectedRows === 0 && !$condition->expectedHighestSequenceNumber->isAny()) {
-            throw $condition->expectedHighestSequenceNumber->isNone() ? ConditionalAppendFailed::becauseNoEventWhereExpected() : ConditionalAppendFailed::becauseNoEventMatchedTheQuery($condition->expectedHighestSequenceNumber);
+            throw $condition->expectedHighestSequenceNumber->isNone() ? ConditionalAppendFailed::becauseNoEventWhereExpected() : ConditionalAppendFailed::becauseHighestExpectedSequenceNumberDoesNotMatch($condition->expectedHighestSequenceNumber);
         }
     }
 
+    // -------------------------------------
+
     /**
-     * @param array<int|string, mixed> $parameters
+     * @param array<int<0, max>|string, mixed> $parameters
      * @param array<int|string, Type|int|string|null> $parameterTypes
      */
     private function commitStatement(string $statement, array $parameters, array $parameterTypes): int
@@ -191,96 +190,72 @@ final class DoctrineEventStore implements EventStore, Setupable
         $retryAttempt = 0;
         while (true) {
             try {
-                if ($this->isPostgreSQL()) {
-                    $this->connection->beginTransaction();
-                    $this->connection->executeStatement('LOCK TABLE ' . $this->eventTableName . ' IN SHARE UPDATE EXCLUSIVE MODE');
+                if ($this->config->isPostgreSQL()) {
+                    $this->config->connection->executeStatement('BEGIN ISOLATION LEVEL SERIALIZABLE');
                 }
-                $affectedRows = (int)$this->connection->executeStatement($statement, $parameters, $parameterTypes);
-                if ($this->isPostgreSQL()) {
-                    $this->connection->commit();
+                $affectedRows = (int)$this->config->connection->executeStatement($statement, $parameters, $parameterTypes);
+                if ($this->config->isPostgreSQL()) {
+                    $this->config->connection->executeStatement('COMMIT');
                 }
                 return $affectedRows;
-            } catch (DbalException $e) {
-                if ($this->isPostgreSQL()) {
-                    try {
-                        $this->connection->rollBack();
-                    } catch (Exception $e) {
-                    }
-                }
-                if ((int)$e->getCode() !== 1213) {
-                    throw new RuntimeException(sprintf('Failed to commit events: %s', $e->getMessage()), 1685956215, $e);
-                }
+            } catch (DeadlockException $e) {
                 if ($retryAttempt >= $maxRetryAttempts) {
                     throw new RuntimeException(sprintf('Failed after %d retry attempts', $retryAttempt), 1686565685, $e);
                 }
                 usleep((int)($retryWaitInterval * 1E6));
-                $retryAttempt++;
+                $retryAttempt ++;
                 $retryWaitInterval *= 2;
+            } catch (DbalException $e) {
+                throw new RuntimeException(sprintf('Failed to commit events (error code: %d): %s', (int)$e->getCode(), $e->getMessage()), 1685956215, $e);
+            } finally {
+                if ($this->config->isPostgreSQL()) {
+                    $this->config->connection->executeStatement('ROLLBACK');
+                }
             }
         }
     }
 
-    // -------------------------------------
-
-    private function isPostgreSQL(): bool
-    {
-        return $this->platform instanceof PostgreSQLPlatform;
-    }
-
-    private function isSQLite(): bool
-    {
-        return $this->platform instanceof SqlitePlatform;
-    }
-
     private function addStreamQueryConstraints(QueryBuilder $queryBuilder, StreamQuery $streamQuery): void
     {
-        $this->dynamicParameterCount = 0;
-        /** @var array<string> $criteriaConstraintStatements */
-        $criteriaConstraintStatements = $streamQuery->criteria->map(fn (Criterion $criterion) => match ($criterion::class) {
-            EventTypesCriterion::class => $this->eventTypeInStatement($queryBuilder, $criterion->eventTypes),
-            TagsCriterion::class => $this->tagsIntersectStatement($queryBuilder, $criterion->tags),
-            EventTypesAndTagsCriterion::class => (string)$queryBuilder->expr()->and($this->eventTypeInStatement($queryBuilder, $criterion->eventTypes), $this->tagsIntersectStatement($queryBuilder, $criterion->tags)),
-            default => throw new RuntimeException(sprintf('Unsupported StreamQuery criterion "%s"', get_debug_type($criterion)), 1690909507),
-        });
-        if ($criteriaConstraintStatements === []) {
+        if ($streamQuery->isWildcard()) {
             return;
         }
-        $queryBuilder->andWhere($queryBuilder->expr()->or(...$criteriaConstraintStatements));
-    }
-
-    private function tagsIntersectStatement(QueryBuilder $queryBuilder, Tags $tags): string
-    {
-        $tagsParameterName = $this->createUniqueParameterName();
-        $queryBuilder->setParameter($tagsParameterName, json_encode($tags));
-        if ($this->isSQLite()) {
-            return "NOT EXISTS(SELECT value FROM JSON_EACH(:$tagsParameterName) WHERE value NOT IN (SELECT value FROM JSON_EACH($this->eventTableName.tags)))";
+        $this->config->resetUniqueParameterCount();
+        $criterionStatements = [];
+        $processedCriterionHashes = [];
+        foreach ($streamQuery->criteria as $criterion) {
+            $hash = $criterion->hash()->value;
+            if (in_array($hash, $processedCriterionHashes, true)) {
+                continue;
+            }
+            $processedCriterionHashes[] = $hash;
+            $criterionQueryBuilder = $this->config->connection->createQueryBuilder()
+                ->select('sequence_number, \'' . $hash . '\' AS criterion_hash')
+                ->from($this->config->eventTableName, 'events');
+            $this->config->criterionImplementations->applyCriterionConstraints($criterion, $criterionQueryBuilder, $this->config);
+            $criterionStatements[] = $criterionQueryBuilder->getSQL();
+            $queryBuilder->setParameters([...$queryBuilder->getParameters(), ...$criterionQueryBuilder->getParameters()], [...$queryBuilder->getParameterTypes(), ...$criterionQueryBuilder->getParameterTypes()]);
         }
-        if ($this->isPostgreSQL()) {
-            return "$this->eventTableName.tags @> :$tagsParameterName::jsonb";
+        $joinQueryBuilder = $this->config->connection->createQueryBuilder()
+            ->select('sequence_number')
+            ->from('(' . implode(' UNION ALL ', $criterionStatements) . ')', 'h')
+            ->groupBy('h.sequence_number');
+        if ($this->config->isPostgreSQL()) {
+            $joinQueryBuilder->addSelect('STRING_AGG(criterion_hash, \',\') AS criterion_hashes');
+        } else {
+            $joinQueryBuilder->addSelect('GROUP_CONCAT(criterion_hash) AS criterion_hashes');
         }
-        return "JSON_CONTAINS(tags, :$tagsParameterName)";
-    }
-
-    private function eventTypeInStatement(QueryBuilder $queryBuilder, EventTypes $eventTypes): string
-    {
-        $eventTypesParameterName = $this->createUniqueParameterName();
-        $queryBuilder->setParameter($eventTypesParameterName, $eventTypes->toStringArray(), ArrayParameterType::STRING);
-        return "type IN (:$eventTypesParameterName)";
-    }
-
-    private function createUniqueParameterName(): string
-    {
-        return 'param_' . (++$this->dynamicParameterCount);
+        $queryBuilder->innerJoin('events', '(' . $joinQueryBuilder->getSQL() . ')', 'eh', 'eh.sequence_number = events.sequence_number');
     }
 
     private function reconnectDatabaseConnection(): void
     {
         try {
-            $this->connection->fetchOne('SELECT 1');
+            $this->config->connection->fetchOne('SELECT 1');
         } catch (Exception $_) {
-            $this->connection->close();
+            $this->config->connection->close();
             try {
-                $this->connection->connect();
+                $this->config->connection->connect();
             } catch (DbalException $e) {
                 throw new RuntimeException(sprintf('Failed to reconnect database connection: %s', $e->getMessage()), 1686045084, $e);
             }

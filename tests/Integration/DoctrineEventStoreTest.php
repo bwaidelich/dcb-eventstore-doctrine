@@ -26,7 +26,6 @@ final class DoctrineEventStoreTest extends EventStoreTestBase
         $connection = DriverManager::getConnection(['url' => $dsn]);
         $eventStore = DoctrineEventStore::create($connection, $eventTableName);
         $eventStore->setup();
-
         if ($connection->getDatabasePlatform() instanceof SqlitePlatform) {
             $connection->executeStatement('DELETE FROM ' . $eventTableName);
             $connection->executeStatement('UPDATE SQLITE_SEQUENCE SET SEQ=0 WHERE NAME="' . $eventTableName . '"');

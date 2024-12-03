@@ -20,19 +20,19 @@
     }
   ],
   "require": {
-    "php": ">=8.1",
+    "php": ">=8.2",
     "ramsey/uuid": "^4.7",
     "psr/clock": "^1",
     "webmozart/assert": "^1.11",
-    "doctrine/dbal": "^3.6",
-    "wwwision/dcb-eventstore": "^3"
+    "doctrine/dbal": "^2.8 || ^3.6",
+    "wwwision/dcb-eventstore": "@dev"
   },
   "require-dev": {
     "roave/security-advisories": "dev-latest",
-    "phpstan/phpstan": "^1.10",
+    "phpstan/phpstan": "^2",
     "squizlabs/php_codesniffer": "^4.0.x-dev",
-    "phpunit/phpunit": "^10.1",
-    "brianium/paratest": "^7.2"
+    "phpunit/phpunit": "^11",
+    "brianium/paratest": "^7"
   },
   "autoload": {
     "psr-4": {
@@ -49,7 +49,10 @@
     "test:phpstan": "phpstan",
     "test:cs": "phpcs --colors src",
     "test:cs:fix": "phpcbf --colors src",
-    "test:integration": "phpunit tests/Integration --exclude-group=parallel",
+    "test:integration": [
+      "echo $DCB_TEST_DSN",
+      "phpunit tests/Integration --exclude-group=parallel"
+    ],
     "test:consistency": [
       "Wwwision\\DCBEventStoreDoctrine\\Tests\\Integration\\ConcurrencyTest::prepare",
       "paratest tests/Integration --group=parallel --functional --processes 20",
