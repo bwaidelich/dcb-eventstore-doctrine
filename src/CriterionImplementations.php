@@ -9,8 +9,6 @@ use InvalidArgumentException;
 use RuntimeException;
 use Wwwision\DCBEventStore\Types\StreamQuery\Criterion;
 use Wwwision\DCBEventStoreDoctrine\CriterionImplementations\EventTypesAndTagsCriterionImplementation;
-use Wwwision\DCBEventStoreDoctrine\CriterionImplementations\EventTypesCriterionImplementation;
-use Wwwision\DCBEventStoreDoctrine\CriterionImplementations\TagsCriterionImplementation;
 
 final class CriterionImplementations
 {

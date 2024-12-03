@@ -31,7 +31,7 @@ final class DoctrineEventStoreConfiguration
         }
     }
 
-    public static function create(Connection $connection, string $eventTableName, CriterionImplementations $criterionImplementations = null): self
+    public static function create(Connection $connection, string $eventTableName, CriterionImplementations|null $criterionImplementations = null): self
     {
         return new self(
             $connection,

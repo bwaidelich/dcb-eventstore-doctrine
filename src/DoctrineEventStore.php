@@ -45,7 +45,7 @@ final class DoctrineEventStore implements EventStore, Setupable
     ) {
     }
 
-    public static function create(Connection $connection, string $eventTableName, CriterionImplementations $criterionImplementations = null): self
+    public static function create(Connection $connection, string $eventTableName, CriterionImplementations|null $criterionImplementations = null): self
     {
         $config = DoctrineEventStoreConfiguration::create($connection, $eventTableName, $criterionImplementations);
         return new self($config);
