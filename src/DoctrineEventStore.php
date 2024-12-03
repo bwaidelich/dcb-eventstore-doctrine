@@ -65,13 +65,8 @@ final class DoctrineEventStore implements EventStore, Setupable
 
     private function getSchemaDiff(): SchemaDiff
     {
-        if (method_exists($this->config->connection, 'createSchemaManager')) {
-            $schemaManager = $this->config->connection->createSchemaManager();
-            return $schemaManager->createComparator()->compareSchemas($schemaManager->introspectSchema(), $this->databaseSchema());
-        }
-        $schemaManager = $this->config->connection->getSchemaManager();
-        assert($schemaManager !== null);
-        return (new Comparator())->compare($schemaManager->createSchema(), $this->databaseSchema());
+        $schemaManager = $this->config->connection->createSchemaManager();
+        return $schemaManager->createComparator()->compareSchemas($schemaManager->introspectSchema(), $this->databaseSchema());
     }
 
     /**
@@ -106,7 +101,7 @@ final class DoctrineEventStore implements EventStore, Setupable
         if ($query->isWildcard()) {
             return $this->readAll($options);
         }
-        $backwards = $options?->backwards ?? false;
+        $backwards = $options->backwards ?? false;
         $queryBuilder = $this->config->connection->createQueryBuilder()
             ->select('events.*, criterion_hashes')
             ->from($this->config->eventTableName, 'events')
@@ -116,12 +111,12 @@ final class DoctrineEventStore implements EventStore, Setupable
             $queryBuilder->andWhere('events.sequence_number ' . $operator . ' :minimumSequenceNumber')->setParameter('minimumSequenceNumber', $options->from->value);
         }
         $this->addStreamQueryConstraints($queryBuilder, $query);
-        return self::toEventStream($queryBuilder);
+        return new DoctrineEventStream($queryBuilder->executeQuery());
     }
 
     public function readAll(?ReadOptions $options = null): EventStream
     {
-        $backwards = $options?->backwards ?? false;
+        $backwards = $options->backwards ?? false;
         $queryBuilder = $this->config->connection->createQueryBuilder()
             ->select('events.*, \'\' AS criterion_hashes')
             ->from($this->config->eventTableName, 'events')
@@ -130,17 +125,7 @@ final class DoctrineEventStore implements EventStore, Setupable
             $operator = $backwards ? '<=' : '>=';
             $queryBuilder->andWhere('events.sequence_number ' . $operator . ' :minimumSequenceNumber')->setParameter('minimumSequenceNumber', $options->from->value);
         }
-        return self::toEventStream($queryBuilder);
-    }
-
-    private static function toEventStream(QueryBuilder $queryBuilder): DoctrineEventStream
-    {
-        if (method_exists($queryBuilder, 'executeQuery')) {
-            return new DoctrineEventStream($queryBuilder->executeQuery());
-        }
-        $result = $queryBuilder->execute();
-        assert($result instanceof Result);
-        return new DoctrineEventStream($result);
+        return new DoctrineEventStream($queryBuilder->executeQuery());
     }
 
     public function append(Events $events, AppendCondition $condition): void
@@ -195,7 +180,7 @@ final class DoctrineEventStore implements EventStore, Setupable
     // -------------------------------------
 
     /**
-     * @param array<int|string, mixed> $parameters
+     * @param array<int<0, max>|string, mixed> $parameters
      * @param array<int|string, Type|int|string|null> $parameterTypes
      */
     private function commitStatement(string $statement, array $parameters, array $parameterTypes): int
