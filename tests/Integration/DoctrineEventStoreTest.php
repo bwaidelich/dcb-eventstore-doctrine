@@ -26,14 +26,9 @@ final class DoctrineEventStoreTest extends EventStoreTestBase
         $connection = DriverManager::getConnection(['url' => $dsn]);
         $eventStore = DoctrineEventStore::create($connection, $eventTableName);
         $eventStore->setup();
-
+        $connection->executeStatement($connection->getDatabasePlatform()->getTruncateTableSQL($eventTableName, true));
         if ($connection->getDatabasePlatform() instanceof SqlitePlatform) {
-            $connection->executeStatement('DELETE FROM ' . $eventTableName);
             $connection->executeStatement('UPDATE SQLITE_SEQUENCE SET SEQ=0 WHERE NAME="' . $eventTableName . '"');
-        } elseif ($connection->getDatabasePlatform() instanceof PostgreSQLPlatform) {
-            $connection->executeStatement('TRUNCATE TABLE ' . $eventTableName . ' RESTART IDENTITY');
-        } else {
-            $connection->executeStatement('TRUNCATE TABLE ' . $eventTableName);
         }
         return $eventStore;
     }
