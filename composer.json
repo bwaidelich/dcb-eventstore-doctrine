@@ -20,12 +20,12 @@
     }
   ],
   "require": {
-    "php": ">=8.2",
+    "php": ">=8.4",
     "ramsey/uuid": "^4.7",
     "psr/clock": "^1",
     "webmozart/assert": "^1.11",
-    "doctrine/dbal": "^2.8 || ^3.6",
-    "wwwision/dcb-eventstore": "@dev"
+    "doctrine/dbal": "^3.6",
+    "wwwision/dcb-eventstore": "^4"
   },
   "require-dev": {
     "roave/security-advisories": "dev-latest",
