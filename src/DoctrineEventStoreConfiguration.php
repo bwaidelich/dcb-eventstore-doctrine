@@ -21,7 +21,6 @@ final class DoctrineEventStoreConfiguration
     public function __construct(
         public readonly Connection $connection,
         public readonly string $eventTableName,
-        public readonly CriterionImplementations $criterionImplementations,
         public readonly ClockInterface $clock,
     ) {
         try {
@@ -31,19 +30,18 @@ final class DoctrineEventStoreConfiguration
         }
     }
 
-    public static function create(Connection $connection, string $eventTableName, CriterionImplementations|null $criterionImplementations = null): self
+    public static function create(Connection $connection, string $eventTableName): self
     {
         return new self(
             $connection,
             $eventTableName,
-            $criterionImplementations ?? CriterionImplementations::createDefault(),
             new SystemClock(),
         );
     }
 
     public function withClock(ClockInterface $clock): self
     {
-        return new self($this->connection, $this->eventTableName, $this->criterionImplementations, $clock);
+        return new self($this->connection, $this->eventTableName, $clock);
     }
 
     public function createUniqueParameterName(): string
