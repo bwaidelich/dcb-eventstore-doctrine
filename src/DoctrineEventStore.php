@@ -12,6 +12,7 @@ use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
 use Doctrine\DBAL\Platforms\SqlitePlatform;
 use Doctrine\DBAL\Query\QueryBuilder;
 use Doctrine\DBAL\Schema\Schema;
+use Doctrine\DBAL\Schema\SchemaDiff;
 use Doctrine\DBAL\Schema\SchemaException;
 use Doctrine\DBAL\Types\Type;
 use Doctrine\DBAL\Types\Types;
@@ -73,15 +74,42 @@ final class DoctrineEventStore implements EventStore, Setupable
     {
         try {
             $schemaManager = $this->connection->createSchemaManager();
-
             $schemaDiff = $schemaManager->createComparator()->compareSchemas($schemaManager->introspectSchema(), $this->databaseSchema());
-            // TODO find replacement, @see https://github.com/doctrine/dbal/blob/3.6.x/UPGRADE.md#deprecated-schemadifftosql-and-schemadifftosavesql
-            foreach ($schemaDiff->toSaveSql($this->platform) as $statement) {
+            foreach (self::toSaveSql($this->platform, $schemaDiff) as $statement) {
                 $this->connection->executeStatement($statement);
             }
         } catch (DbalException $e) {
             throw new RuntimeException(sprintf('Failed to setup event store: %s', $e->getMessage()), 1687010035, $e);
         }
+    }
+
+    /**
+     * @return array<string>
+     * @throws DbalException
+     */
+    private static function toSaveSql(AbstractPlatform $platform, SchemaDiff $schemaDiff): array
+    {
+        $sql = [];
+        if ($platform->supportsSchemas()) {
+            foreach ($schemaDiff->getCreatedSchemas() as $schema) {
+                $sql[] = $platform->getCreateSchemaSQL($schema);
+            }
+        }
+        if ($platform->supportsSequences() === true) {
+            foreach ($schemaDiff->getAlteredSequences() as $sequence) {
+                $sql[] = $platform->getAlterSequenceSQL($sequence);
+            }
+            foreach ($schemaDiff->getCreatedSequences() as $sequence) {
+                $sql[] = $platform->getCreateSequenceSQL($sequence);
+            }
+        }
+        $sql = array_merge($sql, $platform->getCreateTablesSQL($schemaDiff->getCreatedTables()));
+        foreach ($schemaDiff->getAlteredTables() as $tableDiff) {
+            foreach ($platform->getAlterTableSQL($tableDiff) as $statement) {
+                $sql[] = $statement;
+            }
+        }
+        return $sql;
     }
 
     /**
