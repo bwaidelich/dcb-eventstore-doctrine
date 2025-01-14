@@ -1,6 +1,6 @@
-# Dynamic Consistency Boundaries Event Store - Doctrine DBAL adapter
+# Dynamic Consistency Boundary Event Store - Doctrine DBAL adapter
 
-[Doctrine DBAL](https://www.doctrine-project.org/projects/doctrine-dbal/en/current/index.html) adapter for the [Dynamic Consistency Boundaries implementation](https://github.com/bwaidelich/dcb-eventstore).
+[Doctrine DBAL](https://www.doctrine-project.org/projects/doctrine-dbal/en/current/index.html) adapter for the [Dynamic Consistency Boundary implementation](https://github.com/bwaidelich/dcb-eventstore).
 
 ## Usage
 

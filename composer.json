@@ -1,6 +1,6 @@
 {
   "name": "wwwision/dcb-eventstore-doctrine",
-  "description": "Doctrine DBAL adapter for the Dynamic Consistency Boundaries implementation",
+  "description": "Doctrine DBAL adapter for the Dynamic Consistency Boundary implementation",
   "type": "package",
   "license": "MIT",
   "authors": [
