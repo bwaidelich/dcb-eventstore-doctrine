@@ -25,7 +25,7 @@
     "psr/clock": "^1",
     "webmozart/assert": "^1.11",
     "doctrine/dbal": "^3.6",
-    "wwwision/dcb-eventstore": "@dev"
+    "wwwision/dcb-eventstore": "^4"
   },
   "require-dev": {
     "roave/security-advisories": "dev-latest",
