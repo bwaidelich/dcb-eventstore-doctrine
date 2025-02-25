@@ -10,13 +10,8 @@ use Traversable;
 use Webmozart\Assert\Assert;
 use Wwwision\DCBEventStore\EventStream;
 use Wwwision\DCBEventStore\Types\Event;
-use Wwwision\DCBEventStore\Types\EventData;
 use Wwwision\DCBEventStore\Types\EventEnvelope;
-use Wwwision\DCBEventStore\Types\EventId;
-use Wwwision\DCBEventStore\Types\EventMetadata;
-use Wwwision\DCBEventStore\Types\EventType;
 use Wwwision\DCBEventStore\Types\SequenceNumber;
-use Wwwision\DCBEventStore\Types\Tags;
 
 final class DoctrineEventStream implements EventStream
 {
@@ -54,12 +49,11 @@ final class DoctrineEventStream implements EventStream
         return new EventEnvelope(
             SequenceNumber::fromInteger((int)$row['sequence_number']),
             $recordedAt,
-            new Event(
-                EventId::fromString($row['id']),
-                EventType::fromString($row['type']),
-                EventData::fromString($row['data']),
-                Tags::fromJson($row['tags']),
-                $row['metadata'] === null ? EventMetadata::none() : EventMetadata::fromJson($row['metadata']),
+            Event::create(
+                $row['type'],
+                $row['data'],
+                $row['tags'],
+                $row['metadata'],
             ),
         );
     }

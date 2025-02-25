@@ -41,7 +41,15 @@ final class ConcurrencyTest extends EventStoreConcurrencyTestBase
 
     public static function cleanup(): void
     {
-        self::connection()->executeStatement('DROP TABLE dcb_events_test');
+        $connection = self::connection();
+        if ($connection->getDatabasePlatform() instanceof SqlitePlatform) {
+            $connection->executeStatement('DELETE FROM ' . self::eventTableName());
+            $connection->executeStatement('UPDATE SQLITE_SEQUENCE SET SEQ=0 WHERE NAME="' . self::eventTableName() . '"');
+        } elseif ($connection->getDatabasePlatform() instanceof PostgreSQLPlatform) {
+            $connection->executeStatement('TRUNCATE TABLE ' . self::eventTableName() . ' RESTART IDENTITY');
+        } else {
+            $connection->executeStatement('TRUNCATE TABLE ' . self::eventTableName());
+        }
     }
 
     protected static function createEventStore(): EventStore
