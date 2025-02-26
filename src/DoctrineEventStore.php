@@ -180,12 +180,6 @@ final class DoctrineEventStore implements EventStore, Setupable
                 }
                 return $affectedRows;
             } catch (DbalException $e) {
-                if ($this->config->isPostgreSQL()) {
-                    try {
-                        $this->config->connection->rollBack();
-                    } catch (Exception $e) {
-                    }
-                }
                 if (!$e instanceof DbalException\ServerException || (int)$e->getErrorCode() !== 1213) {
                     throw new RuntimeException(sprintf('Failed to commit events: %s', $e->getMessage()), 1685956215, $e);
                 }
