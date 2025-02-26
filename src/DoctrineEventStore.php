@@ -6,10 +6,12 @@ namespace Wwwision\DCBEventStoreDoctrine;
 
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Exception as DbalException;
+use Doctrine\DBAL\Exception\DeadlockException;
 use Doctrine\DBAL\Query\QueryBuilder;
 use Doctrine\DBAL\Result;
 use Doctrine\DBAL\Schema\Comparator;
 use Doctrine\DBAL\Schema\Schema;
+use Doctrine\DBAL\Schema\SchemaDiff;
 use Doctrine\DBAL\Schema\SchemaException;
 use Doctrine\DBAL\Types\Type;
 use Doctrine\DBAL\Types\Types;
@@ -52,17 +54,23 @@ final class DoctrineEventStore implements EventStore, Setupable
     public function setup(): void
     {
         try {
-            $schemaManager = $this->config->connection->getSchemaManager();
-            assert($schemaManager !== null); // @phpstan-ignore-line
-
-            $schemaDiff = (new Comparator())->compare($schemaManager->createSchema(), $this->databaseSchema());
-            // TODO find replacement, @see https://github.com/doctrine/dbal/blob/3.6.x/UPGRADE.md#deprecated-schemadifftosql-and-schemadifftosavesql
-            foreach ($schemaDiff->toSaveSql($this->config->platform) as $statement) {
+            // TODO find replacement, @see https://github.com/doctrine/dbal/blob/4.2.x/UPGRADE.md#deprecated-schemadifftosql-and-schemadifftosavesql
+            foreach ($this->getSchemaDiff()->toSaveSql($this->config->platform) as $statement) {
                 $this->config->connection->executeStatement($statement);
+            }
+            if ($this->config->isPostgreSQL()) {
+                $this->config->connection->executeStatement('CREATE INDEX IF NOT EXISTS tags ON ' . $this->config->eventTableName . ' USING gin (tags jsonb_path_ops)');
             }
         } catch (DbalException $e) {
             throw new RuntimeException(sprintf('Failed to setup event store: %s', $e->getMessage()), 1687010035, $e);
         }
+    }
+
+    private function getSchemaDiff(): SchemaDiff
+    {
+        $schemaManager = $this->config->connection->getSchemaManager();
+        assert($schemaManager !== null); // @phpstan-ignore-line
+        return (new Comparator())->compare($schemaManager->createSchema(), $this->databaseSchema());
     }
 
     /**
@@ -179,16 +187,15 @@ final class DoctrineEventStore implements EventStore, Setupable
                     $this->config->connection->executeStatement('COMMIT');
                 }
                 return $affectedRows;
-            } catch (DbalException $e) {
-                if (!$e instanceof DbalException\ServerException || (int)$e->getErrorCode() !== 1213) {
-                    throw new RuntimeException(sprintf('Failed to commit events: %s', $e->getMessage()), 1685956215, $e);
-                }
+            } catch (DeadlockException $e) {
                 if ($retryAttempt >= $maxRetryAttempts) {
                     throw new RuntimeException(sprintf('Failed after %d retry attempts', $retryAttempt), 1686565685, $e);
                 }
                 usleep((int)($retryWaitInterval * 1E6));
                 $retryAttempt ++;
                 $retryWaitInterval *= 2;
+            } catch (DbalException $e) {
+                throw new RuntimeException(sprintf('Failed to commit events (error code: %d): %s', (int)$e->getCode(), $e->getMessage()), 1685956215, $e);
             } finally {
                 if ($this->config->isPostgreSQL()) {
                     $this->config->connection->executeStatement('ROLLBACK');
