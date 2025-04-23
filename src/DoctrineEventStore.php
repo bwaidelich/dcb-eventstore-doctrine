@@ -153,7 +153,7 @@ final class DoctrineEventStore implements EventStore, Setupable
             $events = Events::fromArray([$events]);
         }
         foreach ($events as $event) {
-            $selects[] = "SELECT :e{$eventIndex}_type type, :e{$eventIndex}_data data, :e{$eventIndex}_metadata metadata, :e{$eventIndex}_tags" . ($this->config->isPostgreSQL() ? '::jsonb' : '') . " tags, :e{$eventIndex}_recordedAt" . ($this->config->isPostgreSQL() ? '::timestamp' : '') . " recorded_at";
+            $selects[] = "SELECT :e{$eventIndex}_type type, :e{$eventIndex}_data data, :e{$eventIndex}_metadata" . ($this->config->isPostgreSQL() ? '::jsonb' : '') . " metadata, :e{$eventIndex}_tags" . ($this->config->isPostgreSQL() ? '::jsonb' : '') . " tags, :e{$eventIndex}_recordedAt" . ($this->config->isPostgreSQL() ? '::timestamp' : '') . " recorded_at";
             try {
                 $tags = json_encode($event->tags, JSON_THROW_ON_ERROR);
             } catch (JsonException $e) {
