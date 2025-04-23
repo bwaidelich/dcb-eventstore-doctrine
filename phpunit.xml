@@ -1,23 +1,33 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/10.1/phpunit.xsd"
-         bootstrap="vendor/autoload.php"
-         cacheDirectory=".phpunit.cache"
-         executionOrder="depends,defects"
-         requireCoverageMetadata="true"
-         beStrictAboutCoverageMetadata="true"
-         beStrictAboutOutputDuringTests="true"
-         failOnRisky="true"
-         failOnWarning="true">
+<phpunit
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/11.3/phpunit.xsd"
+        bootstrap="vendor/autoload.php"
+        colors="true"
+        cacheDirectory=".phpunit.cache"
+        executionOrder="random"
+        requireCoverageMetadata="true"
+        failOnRisky="true"
+        stopOnDeprecation="true"
+        failOnDeprecation="true"
+        failOnPhpunitDeprecation="true"
+        failOnWarning="true"
+        enforceTimeLimit="false"
+>
+    <php>
+        <ini name="display_errors" value="1"/>
+        <ini name="error_reporting" value="E_ALL"/>
+        <env name="DOCTRINE_DEPRECATIONS" value="none"/>
+    </php>
     <testsuites>
         <testsuite name="default">
             <directory>tests/unit</directory>
         </testsuite>
     </testsuites>
 
-    <coverage includeUncoveredFiles="false"></coverage>
+    <coverage includeUncoveredFiles="false" />
 
-    <source restrictDeprecations="true" restrictNotices="true" restrictWarnings="true">
+    <source>
         <include>
             <directory>src</directory>
         </include>

@@ -8,10 +8,15 @@ use Doctrine\DBAL\ArrayParameterType;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Exception as DbalException;
 use Doctrine\DBAL\Exception\DeadlockException;
+use Doctrine\DBAL\Platforms\AbstractPlatform;
 use Doctrine\DBAL\Query\QueryBuilder;
+use Doctrine\DBAL\Schema\AbstractSchemaManager;
+use Doctrine\DBAL\Schema\Column;
+use Doctrine\DBAL\Schema\Comparator;
 use Doctrine\DBAL\Schema\Schema;
 use Doctrine\DBAL\Schema\SchemaDiff;
 use Doctrine\DBAL\Schema\SchemaException;
+use Doctrine\DBAL\Schema\Table;
 use Doctrine\DBAL\Types\Type;
 use Doctrine\DBAL\Types\Types;
 use Exception;
@@ -25,6 +30,7 @@ use Wwwision\DCBEventStore\Setupable;
 use Wwwision\DCBEventStore\Types\AppendCondition;
 use Wwwision\DCBEventStore\Types\Event;
 use Wwwision\DCBEventStore\Types\Events;
+use Wwwision\DCBEventStore\Types\EventType;
 use Wwwision\DCBEventStore\Types\ReadOptions;
 use Wwwision\DCBEventStore\Types\StreamQuery\Criteria\EventTypesAndTagsCriterion;
 use Wwwision\DCBEventStore\Types\StreamQuery\StreamQuery;
@@ -52,8 +58,7 @@ final class DoctrineEventStore implements EventStore, Setupable
     public function setup(): void
     {
         try {
-            // TODO find replacement, @see https://github.com/doctrine/dbal/blob/4.2.x/UPGRADE.md#deprecated-schemadifftosql-and-schemadifftosavesql
-            foreach ($this->getSchemaDiff()->toSaveSql($this->config->platform) as $statement) {
+            foreach ($this->determineRequiredSqlStatements() as $statement) {
                 $this->config->connection->executeStatement($statement);
             }
             if ($this->config->isPostgreSQL()) {
@@ -64,35 +69,56 @@ final class DoctrineEventStore implements EventStore, Setupable
         }
     }
 
-    private function getSchemaDiff(): SchemaDiff
+    /**
+     * @return array<string>
+     * @throws DbalException
+     */
+    private function determineRequiredSqlStatements(): array
     {
         $schemaManager = $this->config->connection->createSchemaManager();
-        return $schemaManager->createComparator()->compareSchemas($schemaManager->introspectSchema(), $this->databaseSchema());
+        $platform = $this->config->connection->getDatabasePlatform();
+        if (!$schemaManager->tablesExist([$this->config->eventTableName])) {
+            return $platform->getCreateTableSQL($this->databaseSchema($schemaManager)->getTable($this->config->eventTableName));
+        }
+        $tableSchema = $schemaManager->introspectTable($this->config->eventTableName);
+        $fromSchema = new Schema([$tableSchema], [], $schemaManager->createSchemaConfig());
+        $schemaDiff = $schemaManager->createComparator()->compareSchemas($fromSchema, $this->databaseSchema($schemaManager));
+        return $platform->getAlterSchemaSQL($schemaDiff);
     }
 
     /**
-     * @throws SchemaException
-     */
-    private function databaseSchema(): Schema
+     * @param AbstractSchemaManager<AbstractPlatform> $schemaManager
+    */
+    private function databaseSchema(AbstractSchemaManager $schemaManager): Schema
     {
-        $schema = new Schema();
-        $eventsTable = $schema->createTable($this->config->eventTableName);
-        // The monotonic sequence number
-        $eventsTable->addColumn('sequence_number', Types::INTEGER, ['autoincrement' => true]);
-        // The event type in the format "<BoundedContext>:<EventType>"
-        $eventsTable->addColumn('type', Types::STRING, ['length' => 255]);
-        // The event payload (usually serialized as JSON)
-        $eventsTable->addColumn('data', Types::TEXT);
-        // Optional event metadata as key-value pairs
-        $eventsTable->addColumn('metadata', Types::TEXT, ['notnull' => false, 'platformOptions' => ['jsonb' => true]]);
-        // The event tags (aka domain ids) as JSON
-        $eventsTable->addColumn('tags', Types::JSON, ['platformOptions' => ['jsonb' => true]]);
-        // When the event was appended originally
-        $eventsTable->addColumn('recorded_at', Types::DATETIME_IMMUTABLE);
+        $eventsTable = new Table($this->config->eventTableName, [
 
+            (new Column('sequence_number', Type::getType($this->config->isSQLite() ? Types::INTEGER : Types::BIGINT)))
+                ->setUnsigned(true)
+                ->setAutoincrement(true),
+
+            (new Column('type', Type::getType(Types::STRING)))
+                ->setLength(EventType::LENGTH_MAX)
+                ->setPlatformOptions($this->config->isSQLite() ? [] : ['charset' => 'ascii']),
+
+            (new Column('data', Type::getType(Types::TEXT))),
+
+            (new Column('metadata', Type::getType(Types::JSON)))
+                ->setNotnull(false)
+                ->setPlatformOptions($this->config->isPostgreSQL() ? ['jsonb' => true] : []),
+
+            (new Column('tags', Type::getType(Types::JSON)))
+                ->setPlatformOptions($this->config->isPostgreSQL() ? ['jsonb' => true] : []),
+
+            (new Column('recorded_at', Type::getType(Types::DATETIME_IMMUTABLE))),
+        ]);
         $eventsTable->setPrimaryKey(['sequence_number']);
 
-        return $schema;
+        $schemaConfiguration = $schemaManager->createSchemaConfig();
+        if (!$this->config->isSQLite()) {
+            $schemaConfiguration->setDefaultTableOptions(['charset' => 'utf8mb4']);
+        }
+        return new Schema([$eventsTable], [], $schemaConfiguration);
     }
 
     public function read(StreamQuery $query, ?ReadOptions $options = null): EventStream
@@ -127,7 +153,7 @@ final class DoctrineEventStore implements EventStore, Setupable
             $events = Events::fromArray([$events]);
         }
         foreach ($events as $event) {
-            $selects[] = "SELECT :e{$eventIndex}_type type, :e{$eventIndex}_data data, :e{$eventIndex}_metadata metadata, :e{$eventIndex}_tags" . ($this->config->isPostgreSQL() ? '::jsonb' : '') . " tags, :e{$eventIndex}_recordedAt" . ($this->config->isPostgreSQL() ? '::timestamp' : '') . " recorded_at";
+            $selects[] = "SELECT :e{$eventIndex}_type type, :e{$eventIndex}_data data, :e{$eventIndex}_metadata" . ($this->config->isPostgreSQL() ? '::jsonb' : '') . " metadata, :e{$eventIndex}_tags" . ($this->config->isPostgreSQL() ? '::jsonb' : '') . " tags, :e{$eventIndex}_recordedAt" . ($this->config->isPostgreSQL() ? '::timestamp' : '') . " recorded_at";
             try {
                 $tags = json_encode($event->tags, JSON_THROW_ON_ERROR);
             } catch (JsonException $e) {
