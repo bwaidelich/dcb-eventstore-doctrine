@@ -63,10 +63,10 @@ jobs:
     - name: Install dependencies
       run: composer install --prefer-dist --no-progress
 
-#    - name: Run tests (SQLite)
-#      run: composer run-script test
-#      env:
-#        DCB_TEST_DSN: "pdo-sqlite:///events.sqlite"
+    - name: Run tests (SQLite)
+      run: composer run-script test
+      env:
+        DCB_TEST_DSN: "sqlite:///events.sqlite"
 
     - name: Run tests (MySQL)
       run: composer run-script test

@@ -3,10 +3,13 @@ declare(strict_types=1);
 
 namespace Wwwision\DCBEventStoreDoctrine\Tests\Integration;
 
+use Doctrine\DBAL\Configuration;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\DriverManager;
 use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
 use Doctrine\DBAL\Platforms\SqlitePlatform;
+use Doctrine\DBAL\Schema\DefaultSchemaManagerFactory;
+use Doctrine\DBAL\Tools\DsnParser;
 use PHPUnit\Framework\Attributes\CoversNothing;
 use Wwwision\DCBEventStore\EventStore;
 use Wwwision\DCBEventStore\Tests\Integration\EventStoreConcurrencyTestBase;
@@ -67,7 +70,8 @@ final class ConcurrencyTest extends EventStoreConcurrencyTestBase
             if (!is_string($dsn)) {
                 $dsn = 'sqlite:///events_test.sqlite';
             }
-            self::$connection = DriverManager::getConnection(['url' => $dsn]);
+            $config = new Configuration();
+            self::$connection = DriverManager::getConnection(['url' => $dsn], $config);
         }
         return self::$connection;
     }

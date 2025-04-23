@@ -3,9 +3,12 @@ declare(strict_types=1);
 
 namespace Wwwision\DCBEventStoreDoctrine\Tests\Integration;
 
+use Doctrine\DBAL\Configuration;
 use Doctrine\DBAL\DriverManager;
 use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
 use Doctrine\DBAL\Platforms\SqlitePlatform;
+use Doctrine\DBAL\Schema\DefaultSchemaManagerFactory;
+use Doctrine\DBAL\Tools\DsnParser;
 use PHPUnit\Framework\Attributes\CoversClass;
 use Wwwision\DCBEventStore\Tests\Integration\EventStoreTestBase;
 use Wwwision\DCBEventStoreDoctrine\DoctrineEventStore;
@@ -23,7 +26,9 @@ final class DoctrineEventStoreTest extends EventStoreTestBase
         if (!is_string($dsn)) {
             $dsn = 'sqlite:///events_test.sqlite';
         }
-        $connection = DriverManager::getConnection(['url' => $dsn]);
+
+        $config = new Configuration();
+        $connection = DriverManager::getConnection(['url' => $dsn], $config);
         $eventStore = DoctrineEventStore::create($connection, $eventTableName);
         $eventStore->setup();
         if ($connection->getDatabasePlatform() instanceof SqlitePlatform) {
