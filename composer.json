@@ -24,7 +24,7 @@
     "ramsey/uuid": "^4.7",
     "psr/clock": "^1",
     "webmozart/assert": "^1.11",
-    "doctrine/dbal": "^3.6",
+    "doctrine/dbal": "^2",
     "wwwision/dcb-eventstore": "^4"
   },
   "require-dev": {

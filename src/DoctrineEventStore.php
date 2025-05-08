@@ -4,18 +4,16 @@ declare(strict_types=1);
 
 namespace Wwwision\DCBEventStoreDoctrine;
 
-use Doctrine\DBAL\ArrayParameterType;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Exception as DbalException;
 use Doctrine\DBAL\Exception\DeadlockException;
 use Doctrine\DBAL\Platforms\AbstractPlatform;
 use Doctrine\DBAL\Query\QueryBuilder;
+use Doctrine\DBAL\Result;
 use Doctrine\DBAL\Schema\AbstractSchemaManager;
 use Doctrine\DBAL\Schema\Column;
 use Doctrine\DBAL\Schema\Comparator;
 use Doctrine\DBAL\Schema\Schema;
-use Doctrine\DBAL\Schema\SchemaDiff;
-use Doctrine\DBAL\Schema\SchemaException;
 use Doctrine\DBAL\Schema\Table;
 use Doctrine\DBAL\Types\Type;
 use Doctrine\DBAL\Types\Types;
@@ -35,6 +33,7 @@ use Wwwision\DCBEventStore\Types\ReadOptions;
 use Wwwision\DCBEventStore\Types\StreamQuery\Criteria\EventTypesAndTagsCriterion;
 use Wwwision\DCBEventStore\Types\StreamQuery\StreamQuery;
 
+use function assert;
 use function implode;
 use function json_encode;
 use function sprintf;
@@ -75,20 +74,18 @@ final class DoctrineEventStore implements EventStore, Setupable
      */
     private function determineRequiredSqlStatements(): array
     {
-        $schemaManager = $this->config->connection->createSchemaManager();
+        $schemaManager = $this->config->connection->getSchemaManager();
+        assert($schemaManager !== null); // @phpstan-ignore-line
         $platform = $this->config->connection->getDatabasePlatform();
-        if (!$schemaManager->tablesExist([$this->config->eventTableName])) {
-            return $platform->getCreateTableSQL($this->databaseSchema($schemaManager)->getTable($this->config->eventTableName));
-        }
-        $tableSchema = $schemaManager->introspectTable($this->config->eventTableName);
-        $fromSchema = new Schema([$tableSchema], [], $schemaManager->createSchemaConfig());
-        $schemaDiff = $schemaManager->createComparator()->compareSchemas($fromSchema, $this->databaseSchema($schemaManager));
-        return $platform->getAlterSchemaSQL($schemaDiff);
+        assert($platform !== null); // @phpstan-ignore-line
+
+        $schemaDiff = (new Comparator())->compare($schemaManager->createSchema(), $this->databaseSchema($schemaManager));
+        return $schemaDiff->toSaveSql($platform);
     }
 
     /**
-     * @param AbstractSchemaManager<AbstractPlatform> $schemaManager
-    */
+     * @param AbstractSchemaManager $schemaManager
+     */
     private function databaseSchema(AbstractSchemaManager $schemaManager): Schema
     {
         $eventsTable = new Table($this->config->eventTableName, [
@@ -133,7 +130,9 @@ final class DoctrineEventStore implements EventStore, Setupable
             $queryBuilder->andWhere('events.sequence_number ' . $operator . ' :minimumSequenceNumber')->setParameter('minimumSequenceNumber', $options->from->value);
         }
         $this->addStreamQueryConstraints($queryBuilder, $query);
-        return new DoctrineEventStream($queryBuilder->executeQuery());
+        $result = $queryBuilder->execute();
+        assert($result instanceof Result);
+        return new DoctrineEventStream($result);
     }
 
     public function append(Events|Event $events, AppendCondition $condition): void
@@ -252,7 +251,7 @@ final class DoctrineEventStore implements EventStore, Setupable
         if ($criterion->eventTypes !== null) {
             $eventTypesParameterName = $this->config->createUniqueParameterName();
             $queryBuilder->andWhere("type IN (:$eventTypesParameterName)");
-            $queryBuilder->setParameter($eventTypesParameterName, $criterion->eventTypes->toStringArray(), ArrayParameterType::STRING);
+            $queryBuilder->setParameter($eventTypesParameterName, $criterion->eventTypes->toStringArray(), Connection::PARAM_STR_ARRAY);
         }
         if ($criterion->tags !== null) {
             $tagsParameterName = $this->config->createUniqueParameterName();

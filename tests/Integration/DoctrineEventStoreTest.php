@@ -24,12 +24,11 @@ final class DoctrineEventStoreTest extends EventStoreTestBase
 
         $dsn = getenv('DCB_TEST_DSN');
         if (!is_string($dsn)) {
-            $dsn = 'pdo-sqlite:///events_test.sqlite';
+            $dsn = 'sqlite:///events_test.sqlite';
         }
 
         $config = new Configuration();
-        $config->setSchemaManagerFactory(new DefaultSchemaManagerFactory());
-        $connection = DriverManager::getConnection((new DsnParser())->parse($dsn), $config);
+        $connection = DriverManager::getConnection(['url' => $dsn], $config);
         $eventStore = DoctrineEventStore::create($connection, $eventTableName);
         $eventStore->setup();
         if ($connection->getDatabasePlatform() instanceof SqlitePlatform) {

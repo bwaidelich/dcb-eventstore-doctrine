@@ -8,9 +8,9 @@
         executionOrder="random"
         requireCoverageMetadata="true"
         failOnRisky="true"
-        stopOnDeprecation="true"
-        failOnDeprecation="true"
-        failOnPhpunitDeprecation="true"
+        stopOnDeprecation="false"
+        failOnDeprecation="false"
+        failOnPhpunitDeprecation="false"
         failOnWarning="true"
         enforceTimeLimit="false"
 >

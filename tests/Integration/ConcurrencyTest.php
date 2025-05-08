@@ -68,11 +68,10 @@ final class ConcurrencyTest extends EventStoreConcurrencyTestBase
         if (self::$connection === null) {
             $dsn = getenv('DCB_TEST_DSN');
             if (!is_string($dsn)) {
-                $dsn = 'pdo-sqlite:///events_test.sqlite';
+                $dsn = 'sqlite:///events_test.sqlite';
             }
             $config = new Configuration();
-            $config->setSchemaManagerFactory(new DefaultSchemaManagerFactory());
-            self::$connection = DriverManager::getConnection((new DsnParser())->parse($dsn), $config);
+            self::$connection = DriverManager::getConnection(['url' => $dsn], $config);
         }
         return self::$connection;
     }
