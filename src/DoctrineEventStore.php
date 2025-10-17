@@ -21,17 +21,15 @@ use Exception;
 use JsonException;
 use RuntimeException;
 use Webmozart\Assert\Assert;
+use Wwwision\DCBEventStore\AppendCondition\AppendCondition;
+use Wwwision\DCBEventStore\Event\Event;
+use Wwwision\DCBEventStore\Event\Events;
+use Wwwision\DCBEventStore\Event\EventType;
 use Wwwision\DCBEventStore\EventStore;
-use Wwwision\DCBEventStore\EventStream;
 use Wwwision\DCBEventStore\Exceptions\ConditionalAppendFailed;
-use Wwwision\DCBEventStore\Setupable;
-use Wwwision\DCBEventStore\Types\AppendCondition;
-use Wwwision\DCBEventStore\Types\Event;
-use Wwwision\DCBEventStore\Types\Events;
-use Wwwision\DCBEventStore\Types\EventType;
-use Wwwision\DCBEventStore\Types\ReadOptions;
-use Wwwision\DCBEventStore\Types\StreamQuery\Criteria\EventTypesAndTagsCriterion;
-use Wwwision\DCBEventStore\Types\StreamQuery\StreamQuery;
+use Wwwision\DCBEventStore\Query\Query;
+use Wwwision\DCBEventStore\Query\QueryItem;
+use Wwwision\DCBEventStore\ReadOptions;
 
 use function implode;
 use function json_encode;
@@ -39,7 +37,7 @@ use function sprintf;
 
 use const JSON_THROW_ON_ERROR;
 
-final class DoctrineEventStore implements EventStore, Setupable
+final class DoctrineEventStore implements EventStore
 {
     public function __construct(
         private readonly DoctrineEventStoreConfiguration $config,
@@ -120,7 +118,7 @@ final class DoctrineEventStore implements EventStore, Setupable
         return new Schema([$eventsTable], [], $schemaConfiguration);
     }
 
-    public function read(StreamQuery $query, ReadOptions|null $options = null): EventStream
+    public function read(Query $query, ReadOptions|null $options = null): DoctrineSequencedEvents
     {
         $backwards = $options->backwards ?? false;
         $queryBuilder = $this->config->connection->createQueryBuilder()
@@ -129,13 +127,13 @@ final class DoctrineEventStore implements EventStore, Setupable
             ->orderBy('events.sequence_number', $backwards ? 'DESC' : 'ASC');
         if ($options !== null && $options->from !== null) {
             $operator = $backwards ? '<=' : '>=';
-            $queryBuilder->andWhere('events.sequence_number ' . $operator . ' :minimumSequenceNumber')->setParameter('minimumSequenceNumber', $options->from->value);
+            $queryBuilder->andWhere('events.sequence_number ' . $operator . ' :minimumPosition')->setParameter('minimumPosition', $options->from->value);
         }
         $this->addStreamQueryConstraints($queryBuilder, $query);
-        return new DoctrineEventStream($queryBuilder->executeQuery());
+        return new DoctrineSequencedEvents($queryBuilder->executeQuery());
     }
 
-    public function append(Events|Event $events, AppendCondition $condition): void
+    public function append(Events|Event $events, AppendCondition|null $condition = null): void
     {
         try {
             $this->reconnectDatabaseConnection();
@@ -169,20 +167,20 @@ final class DoctrineEventStore implements EventStore, Setupable
 
         $statement = "INSERT INTO {$this->config->eventTableName} (type, data, metadata, tags, recorded_at) SELECT * FROM ( $unionSelects ) new_events";
         $queryBuilder = null;
-        if (!$condition->expectedHighestSequenceNumber->isAny()) {
+        if ($condition !== null) {
             $queryBuilder = $this->config->connection->createQueryBuilder()->select('events.sequence_number')->from($this->config->eventTableName, 'events')->orderBy('events.sequence_number', 'DESC')->setMaxResults(1);
-            $this->addStreamQueryConstraints($queryBuilder, $condition->query);
+            $this->addStreamQueryConstraints($queryBuilder, $condition->failIfEventsMatch);
             $parameters = [...$parameters, ...$queryBuilder->getParameters()];
-            if ($condition->expectedHighestSequenceNumber->isNone()) {
+            if ($condition->after === null) {
                 $statement .= ' WHERE NOT EXISTS (' . $queryBuilder->getSQL() . ')';
             } else {
                 $statement .= ' WHERE (' . $queryBuilder->getSQL() . ') = :highestSequenceNumber';
-                $parameters['highestSequenceNumber'] = $condition->expectedHighestSequenceNumber->extractSequenceNumber()->value;
+                $parameters['highestSequenceNumber'] = $condition->after->value;
             }
         }
         $affectedRows = $this->commitStatement($statement, $parameters, $queryBuilder?->getParameterTypes() ?? []);
-        if ($affectedRows === 0 && !$condition->expectedHighestSequenceNumber->isAny()) {
-            throw $condition->expectedHighestSequenceNumber->isNone() ? ConditionalAppendFailed::becauseNoEventWhereExpected() : ConditionalAppendFailed::becauseHighestExpectedSequenceNumberDoesNotMatch($condition->expectedHighestSequenceNumber);
+        if ($affectedRows === 0 && $condition !== null) {
+            throw $condition->after === null ? ConditionalAppendFailed::becauseMatchingEventsExist() : ConditionalAppendFailed::becauseMatchingEventsExistAfterSequencePosition($condition->after);
         }
     }
 
@@ -224,18 +222,18 @@ final class DoctrineEventStore implements EventStore, Setupable
         }
     }
 
-    private function addStreamQueryConstraints(QueryBuilder $queryBuilder, StreamQuery $streamQuery): void
+    private function addStreamQueryConstraints(QueryBuilder $queryBuilder, Query $dcbQuery): void
     {
-        if ($streamQuery->isWildcard()) {
+        if (!$dcbQuery->hasItems()) {
             return;
         }
         $this->config->resetUniqueParameterCount();
         $criterionStatements = [];
-        foreach ($streamQuery->criteria as $criterion) {
+        foreach ($dcbQuery as $dcbQueryItem) {
             $criterionQueryBuilder = $this->config->connection->createQueryBuilder()
                 ->select('sequence_number')
                 ->from($this->config->eventTableName, 'events');
-            $this->applyCriterionConstraints($criterion, $criterionQueryBuilder);
+            $this->applyDcbQueryItemConstraints($criterionQueryBuilder, $dcbQueryItem);
             $criterionStatements[] = $criterionQueryBuilder->getSQL();
             $queryBuilder->setParameters([...$queryBuilder->getParameters(), ...$criterionQueryBuilder->getParameters()], [...$queryBuilder->getParameterTypes(), ...$criterionQueryBuilder->getParameterTypes()]);
         }
@@ -246,14 +244,14 @@ final class DoctrineEventStore implements EventStore, Setupable
         $queryBuilder->innerJoin('events', '(' . $joinQueryBuilder->getSQL() . ')', 'eh', 'eh.sequence_number = events.sequence_number');
     }
 
-    private function applyCriterionConstraints(EventTypesAndTagsCriterion $criterion, QueryBuilder $queryBuilder): void
+    private function applyDcbQueryItemConstraints(QueryBuilder $queryBuilder, QueryItem $dcbQueryItem): void
     {
-        if ($criterion->eventTypes !== null) {
+        if ($dcbQueryItem->eventTypes !== null) {
             $eventTypesParameterName = $this->config->createUniqueParameterName();
             $queryBuilder->andWhere("type IN (:$eventTypesParameterName)");
-            $queryBuilder->setParameter($eventTypesParameterName, $criterion->eventTypes->toStringArray(), ArrayParameterType::STRING);
+            $queryBuilder->setParameter($eventTypesParameterName, $dcbQueryItem->eventTypes->toStringArray(), ArrayParameterType::STRING);
         }
-        if ($criterion->tags !== null) {
+        if ($dcbQueryItem->tags !== null) {
             $tagsParameterName = $this->config->createUniqueParameterName();
             if ($this->config->isSQLite()) {
                 $queryBuilder->andWhere("NOT EXISTS(SELECT value FROM JSON_EACH(:$tagsParameterName) WHERE value NOT IN (SELECT value FROM JSON_EACH(tags)))");
@@ -262,9 +260,9 @@ final class DoctrineEventStore implements EventStore, Setupable
             } else {
                 $queryBuilder->andWhere("JSON_CONTAINS(tags, :$tagsParameterName)");
             }
-            $queryBuilder->setParameter($tagsParameterName, json_encode($criterion->tags));
+            $queryBuilder->setParameter($tagsParameterName, json_encode($dcbQueryItem->tags));
         }
-        if ($criterion->onlyLastEvent) {
+        if ($dcbQueryItem->onlyLastEvent) {
             $queryBuilder->select('MAX(sequence_number) AS sequence_number');
         }
     }
