@@ -15,9 +15,7 @@ use Wwwision\DCBEventStore\Types\SequenceNumber;
 
 final class DoctrineEventStream implements EventStream
 {
-    public function __construct(private readonly Result $result)
-    {
-    }
+    public function __construct(private readonly Result $result) {}
 
     public function getIterator(): Traversable
     {
@@ -26,7 +24,7 @@ final class DoctrineEventStream implements EventStream
         }
     }
 
-    public function first(): ?EventEnvelope
+    public function first(): EventEnvelope|null
     {
         $row = $this->result->fetchAssociative();
         if ($row === false) {
@@ -47,7 +45,7 @@ final class DoctrineEventStream implements EventStream
         $recordedAt = DateTimeImmutable::createFromFormat('Y-m-d H:i:s', $row['recorded_at']);
         Assert::isInstanceOf($recordedAt, DateTimeImmutable::class);
         return new EventEnvelope(
-            SequenceNumber::fromInteger((int)$row['sequence_number']),
+            SequenceNumber::fromInteger((int) $row['sequence_number']),
             $recordedAt,
             Event::create(
                 $row['type'],

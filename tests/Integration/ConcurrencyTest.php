@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace Wwwision\DCBEventStoreDoctrine\Tests\Integration;
@@ -14,16 +15,17 @@ use PHPUnit\Framework\Attributes\CoversNothing;
 use Wwwision\DCBEventStore\EventStore;
 use Wwwision\DCBEventStore\Tests\Integration\EventStoreConcurrencyTestBase;
 use Wwwision\DCBEventStoreDoctrine\DoctrineEventStore;
+
 use function getenv;
 use function is_string;
+
 use const PHP_EOL;
 
 #[CoversNothing]
 final class ConcurrencyTest extends EventStoreConcurrencyTestBase
 {
-
-    private static ?DoctrineEventStore $eventStore = null;
-    private static ?Connection $connection = null;
+    private static DoctrineEventStore|null $eventStore = null;
+    private static Connection|null $connection = null;
 
     public static function prepare(): void
     {

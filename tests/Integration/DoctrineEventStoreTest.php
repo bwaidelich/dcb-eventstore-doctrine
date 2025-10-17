@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace Wwwision\DCBEventStoreDoctrine\Tests\Integration;
@@ -12,6 +13,7 @@ use Doctrine\DBAL\Tools\DsnParser;
 use PHPUnit\Framework\Attributes\CoversClass;
 use Wwwision\DCBEventStore\Tests\Integration\EventStoreTestBase;
 use Wwwision\DCBEventStoreDoctrine\DoctrineEventStore;
+
 use function getenv;
 use function is_string;
 

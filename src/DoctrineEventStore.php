@@ -12,11 +12,8 @@ use Doctrine\DBAL\Platforms\AbstractPlatform;
 use Doctrine\DBAL\Query\QueryBuilder;
 use Doctrine\DBAL\Schema\AbstractSchemaManager;
 use Doctrine\DBAL\Schema\Column;
-use Doctrine\DBAL\Schema\Comparator;
 use Doctrine\DBAL\Schema\Index;
 use Doctrine\DBAL\Schema\Schema;
-use Doctrine\DBAL\Schema\SchemaDiff;
-use Doctrine\DBAL\Schema\SchemaException;
 use Doctrine\DBAL\Schema\Table;
 use Doctrine\DBAL\Types\Type;
 use Doctrine\DBAL\Types\Types;
@@ -44,11 +41,9 @@ use const JSON_THROW_ON_ERROR;
 
 final class DoctrineEventStore implements EventStore, Setupable
 {
-
     public function __construct(
-        private readonly DoctrineEventStoreConfiguration $config
-    ) {
-    }
+        private readonly DoctrineEventStoreConfiguration $config,
+    ) {}
 
     public static function create(Connection $connection, string $eventTableName): self
     {
@@ -125,7 +120,7 @@ final class DoctrineEventStore implements EventStore, Setupable
         return new Schema([$eventsTable], [], $schemaConfiguration);
     }
 
-    public function read(StreamQuery $query, ?ReadOptions $options = null): EventStream
+    public function read(StreamQuery $query, ReadOptions|null $options = null): EventStream
     {
         $backwards = $options->backwards ?? false;
         $queryBuilder = $this->config->connection->createQueryBuilder()
@@ -157,7 +152,7 @@ final class DoctrineEventStore implements EventStore, Setupable
             $events = Events::fromArray([$events]);
         }
         foreach ($events as $event) {
-            $selects[] = "SELECT :e{$eventIndex}_type type, :e{$eventIndex}_data data, :e{$eventIndex}_metadata" . ($this->config->isPostgreSQL() ? '::jsonb' : '') . " metadata, :e{$eventIndex}_tags" . ($this->config->isPostgreSQL() ? '::jsonb' : '') . " tags, :e{$eventIndex}_recordedAt" . ($this->config->isPostgreSQL() ? '::timestamp' : '') . " recorded_at";
+            $selects[] = "SELECT :e{$eventIndex}_type type, :e{$eventIndex}_data data, :e{$eventIndex}_metadata" . ($this->config->isPostgreSQL() ? '::jsonb' : '') . " metadata, :e{$eventIndex}_tags" . ($this->config->isPostgreSQL() ? '::jsonb' : '') . " tags, :e{$eventIndex}_recordedAt" . ($this->config->isPostgreSQL() ? '::timestamp' : '') . ' recorded_at';
             try {
                 $tags = json_encode($event->tags, JSON_THROW_ON_ERROR);
             } catch (JsonException $e) {
@@ -207,7 +202,7 @@ final class DoctrineEventStore implements EventStore, Setupable
                 if ($this->config->isPostgreSQL()) {
                     $this->config->connection->executeStatement('BEGIN ISOLATION LEVEL SERIALIZABLE');
                 }
-                $affectedRows = (int)$this->config->connection->executeStatement($statement, $parameters, $parameterTypes);
+                $affectedRows = (int) $this->config->connection->executeStatement($statement, $parameters, $parameterTypes);
                 if ($this->config->isPostgreSQL()) {
                     $this->config->connection->executeStatement('COMMIT');
                 }
@@ -216,11 +211,11 @@ final class DoctrineEventStore implements EventStore, Setupable
                 if ($retryAttempt >= $maxRetryAttempts) {
                     throw new RuntimeException(sprintf('Failed after %d retry attempts', $retryAttempt), 1686565685, $e);
                 }
-                usleep((int)($retryWaitInterval * 1E6));
-                $retryAttempt ++;
+                usleep((int) ($retryWaitInterval * 1E6));
+                $retryAttempt++;
                 $retryWaitInterval *= 2;
             } catch (DbalException $e) {
-                throw new RuntimeException(sprintf('Failed to commit events (error code: %d): %s', (int)$e->getCode(), $e->getMessage()), 1685956215, $e);
+                throw new RuntimeException(sprintf('Failed to commit events (error code: %d): %s', (int) $e->getCode(), $e->getMessage()), 1685956215, $e);
             } finally {
                 if ($this->config->isPostgreSQL()) {
                     $this->config->connection->executeStatement('ROLLBACK');
