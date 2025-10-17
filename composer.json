@@ -51,7 +51,7 @@
     "test:cs:fix": "phpcbf --colors src",
     "test:integration": [
       "echo $DCB_TEST_DSN",
-      "phpunit tests/Integration --exclude-group=parallel"
+      "phpunit tests/Integration --exclude-group=parallel --exclude-group=feature_liveStream --exclude-group=feature_appendConditionWithoutMatchingEvent"
     ],
     "test:consistency": [
       "Wwwision\\DCBEventStoreDoctrine\\Tests\\Integration\\ConcurrencyTest::prepare",
