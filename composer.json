@@ -56,7 +56,7 @@
     "test:consistency": [
       "php scripts/consistency/prepare.php",
       "paratest tests/Integration --group=parallel --functional --processes 20",
-      "vendor/bin/phpunit --colors --verbose --filter validateEvents tests/Integration/ConcurrencyTest.php",
+      "vendor/bin/phpunit --colors --filter validateEvents tests/Integration/ConcurrencyTest.php",
       "php scripts/consistency/cleanup.php"
     ],
     "test": [
