@@ -13,6 +13,7 @@ use Doctrine\DBAL\Query\QueryBuilder;
 use Doctrine\DBAL\Schema\AbstractSchemaManager;
 use Doctrine\DBAL\Schema\Column;
 use Doctrine\DBAL\Schema\Comparator;
+use Doctrine\DBAL\Schema\Index;
 use Doctrine\DBAL\Schema\Schema;
 use Doctrine\DBAL\Schema\SchemaDiff;
 use Doctrine\DBAL\Schema\SchemaException;
@@ -111,6 +112,9 @@ final class DoctrineEventStore implements EventStore, Setupable
                 ->setPlatformOptions($this->config->isPostgreSQL() ? ['jsonb' => true] : []),
 
             (new Column('recorded_at', Type::getType(Types::DATETIME_IMMUTABLE))),
+        ], [
+            new Index('idx_type', ['type']),
+            new Index('idx_type_sequence_number', ['type', 'sequence_number']),
         ]);
         $eventsTable->setPrimaryKey(['sequence_number']);
 
