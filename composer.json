@@ -54,10 +54,10 @@
       "phpunit tests/Integration --exclude-group=parallel --exclude-group=feature_liveStream --exclude-group=feature_appendConditionWithoutMatchingEvent"
     ],
     "test:consistency": [
-      "Wwwision\\DCBEventStoreDoctrine\\Tests\\Integration\\ConcurrencyTest::prepare",
+      "php scripts/consistency/prepare.php",
       "paratest tests/Integration --group=parallel --functional --processes 20",
-      "Wwwision\\DCBEventStoreDoctrine\\Tests\\Integration\\ConcurrencyTest::validateEvents",
-      "Wwwision\\DCBEventStoreDoctrine\\Tests\\Integration\\ConcurrencyTest::cleanup"
+      "vendor/bin/phpunit --colors --filter validateEvents tests/Integration/ConcurrencyTest.php",
+      "php scripts/consistency/cleanup.php"
     ],
     "test": [
       "@test:phpstan",
