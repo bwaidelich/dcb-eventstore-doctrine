@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Wwwision\DCBEventStoreDoctrine;
 
+use DateTimeImmutable;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Exception as DbalException;
 use Doctrine\DBAL\Platforms\AbstractPlatform;
@@ -11,14 +12,13 @@ use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
 use Doctrine\DBAL\Platforms\SqlitePlatform;
 use Psr\Clock\ClockInterface;
 use RuntimeException;
-use Wwwision\DCBEventStore\Helpers\SystemClock;
 
 final class DoctrineEventStoreConfiguration
 {
     public readonly AbstractPlatform $platform;
     private int $dynamicParameterCount = 0;
 
-    public function __construct(
+    private function __construct(
         public readonly Connection $connection,
         public readonly string $eventTableName,
         public readonly ClockInterface $clock,
@@ -35,7 +35,12 @@ final class DoctrineEventStoreConfiguration
         return new self(
             $connection,
             $eventTableName,
-            new SystemClock(),
+            new class implements ClockInterface {
+                public function now(): DateTimeImmutable
+                {
+                    return new DateTimeImmutable();
+                }
+            },
         );
     }
 

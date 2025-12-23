@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Wwwision\DCBEventStoreDoctrine;
 
+use DateTimeImmutable;
 use Doctrine\DBAL\ArrayParameterType;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Exception as DbalException;
@@ -30,6 +31,10 @@ use Wwwision\DCBEventStore\Exceptions\ConditionalAppendFailed;
 use Wwwision\DCBEventStore\Query\Query;
 use Wwwision\DCBEventStore\Query\QueryItem;
 use Wwwision\DCBEventStore\ReadOptions;
+use Wwwision\DCBEventStore\SequencedEvent\SequencedEvent;
+use Wwwision\DCBEventStore\SequencedEvent\SequencedEvents;
+
+use Wwwision\DCBEventStore\SequencedEvent\SequencePosition;
 
 use function implode;
 use function json_encode;
@@ -118,7 +123,7 @@ final class DoctrineEventStore implements EventStore
         return new Schema([$eventsTable], [], $schemaConfiguration);
     }
 
-    public function read(Query $query, ReadOptions|null $options = null): DoctrineSequencedEvents
+    public function read(Query $query, ReadOptions|null $options = null): SequencedEvents
     {
         $backwards = $options->backwards ?? false;
         $queryBuilder = $this->config->connection->createQueryBuilder()
@@ -129,8 +134,16 @@ final class DoctrineEventStore implements EventStore
             $operator = $backwards ? '<=' : '>=';
             $queryBuilder->andWhere('events.sequence_number ' . $operator . ' :minimumPosition')->setParameter('minimumPosition', $options->from->value);
         }
-        $this->addStreamQueryConstraints($queryBuilder, $query);
-        return new DoctrineSequencedEvents($queryBuilder->executeQuery());
+        $this->addDcbQueryConstraints($queryBuilder, $query);
+        if ($options !== null && $options->limit !== null) {
+            $queryBuilder->setMaxResults($options->limit);
+        }
+        $result = $queryBuilder->executeQuery();
+        return SequencedEvents::create(static function () use ($result) {
+            while (($row = $result->fetchAssociative()) !== false) {
+                yield self::databaseRowToSequencedEvent($row);
+            }
+        });
     }
 
     public function append(Events|Event $events, AppendCondition|null $condition = null): void
@@ -169,7 +182,7 @@ final class DoctrineEventStore implements EventStore
         $queryBuilder = null;
         if ($condition !== null) {
             $queryBuilder = $this->config->connection->createQueryBuilder()->select('events.sequence_number')->from($this->config->eventTableName, 'events')->orderBy('events.sequence_number', 'DESC')->setMaxResults(1);
-            $this->addStreamQueryConstraints($queryBuilder, $condition->failIfEventsMatch);
+            $this->addDcbQueryConstraints($queryBuilder, $condition->failIfEventsMatch);
             $parameters = [...$parameters, ...$queryBuilder->getParameters()];
             if ($condition->after === null) {
                 $statement .= ' WHERE NOT EXISTS (' . $queryBuilder->getSQL() . ')';
@@ -222,7 +235,7 @@ final class DoctrineEventStore implements EventStore
         }
     }
 
-    private function addStreamQueryConstraints(QueryBuilder $queryBuilder, Query $dcbQuery): void
+    private function addDcbQueryConstraints(QueryBuilder $queryBuilder, Query $dcbQuery): void
     {
         if (!$dcbQuery->hasItems()) {
             return;
@@ -260,7 +273,7 @@ final class DoctrineEventStore implements EventStore
             } else {
                 $queryBuilder->andWhere("JSON_CONTAINS(tags, :$tagsParameterName)");
             }
-            $queryBuilder->setParameter($tagsParameterName, json_encode($dcbQueryItem->tags));
+            $queryBuilder->setParameter($tagsParameterName, json_encode($dcbQueryItem->tags, JSON_THROW_ON_ERROR));
         }
         if ($dcbQueryItem->onlyLastEvent) {
             $queryBuilder->select('MAX(sequence_number) AS sequence_number');
@@ -279,5 +292,33 @@ final class DoctrineEventStore implements EventStore
                 throw new RuntimeException(sprintf('Failed to reconnect database connection: %s', $e->getMessage()), 1686045084, $e);
             }
         }
+    }
+
+    /**
+     * @param array<mixed> $row
+     */
+    private static function databaseRowToSequencedEvent(array $row): SequencedEvent
+    {
+        Assert::numeric($row['sequence_number']);
+        Assert::string($row['recorded_at']);
+        Assert::string($row['type']);
+        Assert::string($row['data']);
+        Assert::string($row['tags']);
+        $tagsArray = json_decode($row['tags'], true, 512, JSON_THROW_ON_ERROR);
+        Assert::isList($tagsArray);
+        Assert::allString($tagsArray);
+        Assert::string($row['metadata']);
+        $recordedAt = DateTimeImmutable::createFromFormat('Y-m-d H:i:s', $row['recorded_at']);
+        Assert::isInstanceOf($recordedAt, DateTimeImmutable::class);
+        return new SequencedEvent(
+            SequencePosition::fromInteger((int) $row['sequence_number']),
+            $recordedAt,
+            Event::create(
+                $row['type'],
+                $row['data'],
+                $tagsArray,
+                $row['metadata'],
+            ),
+        );
     }
 }

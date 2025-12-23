@@ -14,6 +14,8 @@ use PHPUnit\Framework\Attributes\CoversClass;
 use Wwwision\DCBEventStore\Tests\Integration\EventStoreTestBase;
 use Wwwision\DCBEventStoreDoctrine\DoctrineEventStore;
 
+use Wwwision\DCBEventStoreDoctrine\DoctrineEventStoreConfiguration;
+
 use function getenv;
 use function is_string;
 
@@ -32,7 +34,9 @@ final class DoctrineEventStoreTest extends EventStoreTestBase
         $config = new Configuration();
         $config->setSchemaManagerFactory(new DefaultSchemaManagerFactory());
         $connection = DriverManager::getConnection((new DsnParser())->parse($dsn), $config);
-        $eventStore = DoctrineEventStore::create($connection, $eventTableName);
+        $eventStoreConfiguration = DoctrineEventStoreConfiguration::create($connection, $eventTableName)
+            ->withClock($this->getTestClock());
+        $eventStore = new DoctrineEventStore($eventStoreConfiguration);
         $eventStore->setup();
         if ($connection->getDatabasePlatform() instanceof SqlitePlatform) {
             $connection->executeStatement('DELETE FROM ' . $eventTableName);
