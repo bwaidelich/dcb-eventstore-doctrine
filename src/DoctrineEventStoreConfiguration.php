@@ -9,7 +9,7 @@ use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Exception as DbalException;
 use Doctrine\DBAL\Platforms\AbstractPlatform;
 use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
-use Doctrine\DBAL\Platforms\SqlitePlatform;
+use Doctrine\DBAL\Platforms\SQLitePlatform;
 use Psr\Clock\ClockInterface;
 use RuntimeException;
 
@@ -21,6 +21,7 @@ final class DoctrineEventStoreConfiguration
     private function __construct(
         public readonly Connection $connection,
         public readonly string $eventTableName,
+        public readonly string $tagTableName,
         public readonly ClockInterface $clock,
     ) {
         try {
@@ -30,11 +31,12 @@ final class DoctrineEventStoreConfiguration
         }
     }
 
-    public static function create(Connection $connection, string $eventTableName): self
+    public static function create(Connection $connection, string $eventTableName, string|null $tagTableName = null): self
     {
         return new self(
             $connection,
             $eventTableName,
+            $tagTableName ?? ($eventTableName . '_tags'),
             new class implements ClockInterface {
                 public function now(): DateTimeImmutable
                 {
@@ -46,7 +48,7 @@ final class DoctrineEventStoreConfiguration
 
     public function withClock(ClockInterface $clock): self
     {
-        return new self($this->connection, $this->eventTableName, $clock);
+        return new self($this->connection, $this->eventTableName, $this->tagTableName, $clock);
     }
 
     public function createUniqueParameterName(): string
@@ -66,6 +68,6 @@ final class DoctrineEventStoreConfiguration
 
     public function isSQLite(): bool
     {
-        return $this->platform instanceof SqlitePlatform;
+        return $this->platform instanceof SQLitePlatform;
     }
 }
