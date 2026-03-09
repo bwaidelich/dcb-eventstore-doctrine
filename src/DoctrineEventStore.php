@@ -18,7 +18,6 @@ use Doctrine\DBAL\Schema\Schema;
 use Doctrine\DBAL\Schema\Table;
 use Doctrine\DBAL\Types\Type;
 use Doctrine\DBAL\Types\Types;
-use Exception;
 use JsonException;
 use RuntimeException;
 use Webmozart\Assert\Assert;
