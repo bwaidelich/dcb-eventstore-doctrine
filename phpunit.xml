@@ -21,7 +21,7 @@
     </php>
     <testsuites>
         <testsuite name="default">
-            <directory>tests/unit</directory>
+            <directory>tests/</directory>
         </testsuite>
     </testsuites>
 
