@@ -9,6 +9,7 @@ use Doctrine\DBAL\ArrayParameterType;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Exception as DbalException;
 use Doctrine\DBAL\Exception\DeadlockException;
+use Doctrine\DBAL\ParameterType;
 use Doctrine\DBAL\Platforms\AbstractPlatform;
 use Doctrine\DBAL\Query\QueryBuilder;
 use Doctrine\DBAL\Schema\AbstractSchemaManager;
@@ -18,7 +19,6 @@ use Doctrine\DBAL\Schema\Schema;
 use Doctrine\DBAL\Schema\Table;
 use Doctrine\DBAL\Types\Type;
 use Doctrine\DBAL\Types\Types;
-use Exception;
 use JsonException;
 use RuntimeException;
 use Webmozart\Assert\Assert;
@@ -196,7 +196,7 @@ final class DoctrineEventStore implements EventStore
 
     /**
      * @param array<int<0, max>|string, mixed> $parameters
-     * @param array<int|string, Type|int|string|null> $parameterTypes
+     * @param array<int<0, max>|string, ArrayParameterType|ParameterType|Type|string> $parameterTypes
      */
     private function commitStatement(string $statement, array $parameters, array $parameterTypes): int
     {
