@@ -9,7 +9,7 @@ use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Exception as DbalException;
 use Doctrine\DBAL\Platforms\AbstractPlatform;
 use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
-use Doctrine\DBAL\Platforms\SqlitePlatform;
+use Doctrine\DBAL\Platforms\SQLitePlatform;
 use Psr\Clock\ClockInterface;
 use RuntimeException;
 
@@ -66,6 +66,6 @@ final class DoctrineEventStoreConfiguration
 
     public function isSQLite(): bool
     {
-        return $this->platform instanceof SqlitePlatform;
+        return $this->platform instanceof SQLitePlatform;
     }
 }
