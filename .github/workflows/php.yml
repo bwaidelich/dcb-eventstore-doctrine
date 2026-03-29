@@ -10,13 +10,104 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  coding-standards:
+    runs-on: ubuntu-latest
 
     strategy:
       matrix:
-        php-versions: [ '8.3', '8.4' , '8.5']
+        php-version:
+          - '8.3'
+        dependencies:
+          - 'highest'
 
+    steps:
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php-version }}
+
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Cache Composer packages
+        id: composer-cache
+        uses: actions/cache@v3
+        with:
+          path: vendor
+          key: ${{ runner.os }}-php-${{ hashFiles('**/composer.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-php-
+
+      - name: Install lowest dependencies
+        if: matrix.dependencies == 'lowest'
+        run: composer update --prefer-dist --prefer-lowest --no-progress
+
+      - name: Install locked dependencies
+        if: matrix.dependencies == 'locked'
+        run: composer install --prefer-dist --no-progress
+
+      - name: Install highest dependencies
+        if: matrix.dependencies == 'highest'
+        run: composer update --prefer-dist --no-progress
+
+      - name: Check coding standards
+        run: composer run-script test:cs
+
+  static-code-analysis:
     runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        php-version:
+          - '8.3'
+        dependencies:
+          - 'highest'
+
+    steps:
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php-version }}
+
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Cache Composer packages
+        id: composer-cache
+        uses: actions/cache@v3
+        with:
+          path: vendor
+          key: ${{ runner.os }}-php-${{ hashFiles('**/composer.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-php-
+
+      - name: Install lowest dependencies
+        if: matrix.dependencies == 'lowest'
+        run: composer update --prefer-dist --prefer-lowest --no-progress
+
+      - name: Install locked dependencies
+        if: matrix.dependencies == 'locked'
+        run: composer install --prefer-dist --no-progress
+
+      - name: Install highest dependencies
+        if: matrix.dependencies == 'highest'
+        run: composer update --prefer-dist --no-progress
+
+      - name: Run static code analysis
+        run: composer run-script test:phpstan
+
+  tests:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        php-version:
+          - '8.3'
+          - '8.4'
+          - '8.5'
+        dependencies:
+          - 'highest'
 
     services:
       mysql:
@@ -39,41 +130,62 @@ jobs:
         options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 3
 
     steps:
-    - name: Setup PHP
-      uses: shivammathur/setup-php@v2
-      with:
-        php-version: ${{ matrix.php-versions }}
-        extensions: pdo_mysql, pdo_sqlite, pdo_pgsql
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php-version }}
+          extensions: pdo_mysql, pdo_sqlite, pdo_pgsql
 
-    - name: Checkout code
-      uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v3
 
-#    - name: Validate composer.json and composer.lock
-#      run: composer validate --strict
+      - name: Cache Composer packages
+        id: composer-cache
+        uses: actions/cache@v3
+        with:
+          path: vendor
+          key: ${{ runner.os }}-php-${{ hashFiles('**/composer.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-php-
 
-    - name: Cache Composer packages
-      id: composer-cache
-      uses: actions/cache@v3
-      with:
-        path: vendor
-        key: ${{ runner.os }}-php-${{ hashFiles('**/composer.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-php-
+      - name: Install lowest dependencies
+        if: matrix.dependencies == 'lowest'
+        run: composer update --prefer-dist --prefer-lowest --no-progress
 
-    - name: Install dependencies
-      run: composer install --prefer-dist --no-progress
+      - name: Install locked dependencies
+        if: matrix.dependencies == 'locked'
+        run: composer install --prefer-dist --no-progress
 
-    - name: Run tests (SQLite)
-      run: composer run-script test
-      env:
-        DCB_TEST_DSN: "pdo-sqlite:///events.sqlite"
+      - name: Install highest dependencies
+        if: matrix.dependencies == 'highest'
+        run: composer update --prefer-dist --no-progress
 
-    - name: Run tests (MySQL)
-      run: composer run-script test
-      env:
-        DCB_TEST_DSN: "pdo-mysql://root:password@127.0.0.1:${{ job.services.mysql.ports['3306'] }}/dcb"
+      - name: Run tests (SQLite)
+        run: composer run-script test:integration
+        env:
+          DCB_TEST_DSN: "pdo-sqlite:///events.sqlite"
 
-    - name: Run tests (PostgreSQL)
-      run: composer run-script test
-      env:
-        DCB_TEST_DSN: "pdo-pgsql://root:password@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/dcb"
+      - name: Run tests (MySQL)
+        run: composer run-script test:integration
+        env:
+          DCB_TEST_DSN: "pdo-mysql://root:password@127.0.0.1:${{ job.services.mysql.ports['3306'] }}/dcb"
+
+      - name: Run tests (PostgreSQL)
+        run: composer run-script test:integration
+        env:
+          DCB_TEST_DSN: "pdo-pgsql://root:password@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/dcb"
+
+      - name: Run consistency tests (SQLite)
+        run: composer run-script test:consistency
+        env:
+          DCB_TEST_DSN: "pdo-sqlite:///events.sqlite"
+
+      - name: Run consistency tests (MySQL)
+        run: composer run-script test:consistency
+        env:
+          DCB_TEST_DSN: "pdo-mysql://root:password@127.0.0.1:${{ job.services.mysql.ports['3306'] }}/dcb"
+
+      - name: Run consistency tests (PostgreSQL)
+        run: composer run-script test:consistency
+        env:
+          DCB_TEST_DSN: "pdo-pgsql://root:password@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/dcb"
