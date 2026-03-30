@@ -108,6 +108,10 @@ jobs:
           - '8.5'
         dependencies:
           - 'highest'
+        database:
+          - 'mysql'
+          - 'postgres'
+          - 'sqlite'
 
     services:
       mysql:
@@ -160,32 +164,16 @@ jobs:
         if: matrix.dependencies == 'highest'
         run: composer update --prefer-dist --no-progress
 
-      - name: Run tests (SQLite)
+      - name: Set DSN
+        run: |
+          case "${{ matrix.database }}" in
+            mysql) echo "DCB_TEST_DSN=pdo-mysql://root:password@127.0.0.1:${{ job.services.mysql.ports['3306'] }}/dcb" >> $GITHUB_ENV ;;
+            postgres) echo "DCB_TEST_DSN=pdo-pgsql://root:password@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/dcb" >> $GITHUB_ENV ;;
+            sqlite) echo "DCB_TEST_DSN=pdo-sqlite:///events.sqlite" >> $GITHUB_ENV ;;
+          esac
+
+      - name: Run integration tests
         run: composer run-script test:integration
-        env:
-          DCB_TEST_DSN: "pdo-sqlite:///events.sqlite"
 
-      - name: Run tests (MySQL)
-        run: composer run-script test:integration
-        env:
-          DCB_TEST_DSN: "pdo-mysql://root:password@127.0.0.1:${{ job.services.mysql.ports['3306'] }}/dcb"
-
-      - name: Run tests (PostgreSQL)
-        run: composer run-script test:integration
-        env:
-          DCB_TEST_DSN: "pdo-pgsql://root:password@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/dcb"
-
-      - name: Run consistency tests (SQLite)
+      - name: Run consistency tests
         run: composer run-script test:consistency
-        env:
-          DCB_TEST_DSN: "pdo-sqlite:///events.sqlite"
-
-      - name: Run consistency tests (MySQL)
-        run: composer run-script test:consistency
-        env:
-          DCB_TEST_DSN: "pdo-mysql://root:password@127.0.0.1:${{ job.services.mysql.ports['3306'] }}/dcb"
-
-      - name: Run consistency tests (PostgreSQL)
-        run: composer run-script test:consistency
-        env:
-          DCB_TEST_DSN: "pdo-pgsql://root:password@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/dcb"
