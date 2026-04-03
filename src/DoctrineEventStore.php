@@ -19,6 +19,7 @@ use Doctrine\DBAL\Schema\Schema;
 use Doctrine\DBAL\Schema\Table;
 use Doctrine\DBAL\Types\Type;
 use Doctrine\DBAL\Types\Types;
+use Exception;
 use JsonException;
 use RuntimeException;
 use Webmozart\Assert\Assert;
@@ -148,6 +149,11 @@ final class DoctrineEventStore implements EventStore
 
     public function append(Events|Event $events, AppendCondition|null $condition = null): void
     {
+        try {
+            $this->reconnectDatabaseConnection();
+        } catch (DbalException $e) {
+            throw new RuntimeException(sprintf('Failed to commit events because database connection could not be reconnected: %s', $e->getMessage()), 1685956292, $e);
+        }
         Assert::eq($this->config->connection->getTransactionNestingLevel(), 0, 'Failed to commit events because a database transaction is active already');
 
         $parameters = [];
@@ -279,6 +285,15 @@ final class DoctrineEventStore implements EventStore
         }
         if ($dcbQueryItem->onlyLastEvent) {
             $queryBuilder->select('MAX(sequence_number) AS sequence_number');
+        }
+    }
+
+    private function reconnectDatabaseConnection(): void
+    {
+        try {
+            $this->config->connection->fetchOne('SELECT 1');
+        } catch (Exception $_) {
+            $this->config->connection->close();
         }
     }
 
