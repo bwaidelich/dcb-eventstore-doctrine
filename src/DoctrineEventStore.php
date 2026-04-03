@@ -204,13 +204,20 @@ final class DoctrineEventStore implements EventStore
         $maxRetryAttempts = 10;
         $retryAttempt = 0;
         while (true) {
+            $transactionActive = false;
             try {
                 if ($this->config->isPostgreSQL()) {
                     $this->config->connection->executeStatement('BEGIN ISOLATION LEVEL SERIALIZABLE');
+                    $transactionActive = true;
+                } elseif (!$this->config->isSQLite()) {
+                    $this->config->connection->executeStatement('SET TRANSACTION ISOLATION LEVEL SERIALIZABLE');
+                    $this->config->connection->executeStatement('START TRANSACTION');
+                    $transactionActive = true;
                 }
                 $affectedRows = (int) $this->config->connection->executeStatement($statement, $parameters, $parameterTypes);
-                if ($this->config->isPostgreSQL()) {
+                if ($transactionActive) {
                     $this->config->connection->executeStatement('COMMIT');
+                    $transactionActive = false;
                 }
                 return $affectedRows;
             } catch (DeadlockException $e) {
@@ -223,7 +230,7 @@ final class DoctrineEventStore implements EventStore
             } catch (DbalException $e) {
                 throw new RuntimeException(sprintf('Failed to commit events (error code: %d): %s', (int) $e->getCode(), $e->getMessage()), 1685956215, $e);
             } finally {
-                if ($this->config->isPostgreSQL()) {
+                if ($transactionActive) {
                     $this->config->connection->executeStatement('ROLLBACK');
                 }
             }
