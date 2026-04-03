@@ -110,6 +110,7 @@ jobs:
           - 'highest'
         database:
           - 'mysql'
+          - 'mariadb'
           - 'postgres'
           - 'sqlite'
 
@@ -123,6 +124,15 @@ jobs:
         ports:
           - 3306/tcp
         options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
+      mariadb:
+        image: mariadb:latest
+        env:
+          MARIADB_ALLOW_EMPTY_ROOT_PASSWORD: false
+          MARIADB_ROOT_PASSWORD: password
+          MARIADB_DATABASE: dcb
+        ports:
+          - 3306/tcp
+        options: --health-cmd="healthcheck.sh --connect --innodb_initialized" --health-interval=10s --health-timeout=5s --health-retries=3
       postgres:
         image: postgres:latest
         env:
@@ -164,23 +174,13 @@ jobs:
         if: matrix.dependencies == 'highest'
         run: composer update --prefer-dist --no-progress
 
-      - name: Derive database name
-        run: echo "DB_NAME=dcb_$(echo '${{ matrix.php-version }}' | tr -d '.')" >> $GITHUB_ENV
-
-      - name: Create MySQL database
-        if: matrix.database == 'mysql'
-        run: mysql --user=root --password=password --host=127.0.0.1 --port=${{ job.services.mysql.ports['3306'] }} -e "CREATE DATABASE ${{ env.DB_NAME }};"
-
-      - name: Create PostgreSQL database
-        if: matrix.database == 'postgres'
-        run: PGPASSWORD=password psql -h 127.0.0.1 -p ${{ job.services.postgres.ports['5432'] }} -U root -d postgres -c "CREATE DATABASE ${{ env.DB_NAME }};"
-
       - name: Set DSN
         run: |
           case "${{ matrix.database }}" in
-            mysql) echo "DCB_TEST_DSN=pdo-mysql://root:password@127.0.0.1:${{ job.services.mysql.ports['3306'] }}/${{ env.DB_NAME }}" >> $GITHUB_ENV ;;
-            postgres) echo "DCB_TEST_DSN=pdo-pgsql://root:password@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/${{ env.DB_NAME }}" >> $GITHUB_ENV ;;
-            sqlite) echo "DCB_TEST_DSN=pdo-sqlite:///${{ env.DB_NAME }}.sqlite" >> $GITHUB_ENV ;;
+            mysql) echo "DCB_TEST_DSN=pdo-mysql://root:password@127.0.0.1:${{ job.services.mysql.ports['3306'] }}/dcb" >> $GITHUB_ENV ;;
+            mariadb) echo "DCB_TEST_DSN=pdo-mysql://root:password@127.0.0.1:${{ job.services.mariadb.ports['3306'] }}/dcb" >> $GITHUB_ENV ;;
+            postgres) echo "DCB_TEST_DSN=pdo-pgsql://root:password@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/dcb" >> $GITHUB_ENV ;;
+            sqlite) echo "DCB_TEST_DSN=pdo-sqlite:///events.sqlite" >> $GITHUB_ENV ;;
           esac
 
       - name: Run integration tests
