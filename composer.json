@@ -24,7 +24,7 @@
     "ramsey/uuid": "^4.7",
     "psr/clock": "^1",
     "webmozart/assert": "^1.11",
-    "doctrine/dbal": "^4",
+    "doctrine/dbal": "^3.6",
     "wwwision/dcb-eventstore": "^5"
   },
   "require-dev": {
@@ -56,6 +56,7 @@
     "test:consistency": [
       "php scripts/consistency/prepare.php",
       "paratest tests/Integration --group=parallel --functional --processes 20",
+      "php scripts/consistency/validate-events.php",
       "php scripts/consistency/cleanup.php"
     ],
     "test": [

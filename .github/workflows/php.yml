@@ -156,10 +156,6 @@ jobs:
         if: matrix.dependencies == 'lowest'
         run: composer update --prefer-dist --prefer-lowest --no-progress
 
-      - name: Install locked dependencies
-        if: matrix.dependencies == 'locked'
-        run: composer install --prefer-dist --no-progress
-
       - name: Install highest dependencies
         if: matrix.dependencies == 'highest'
         run: composer update --prefer-dist --no-progress
