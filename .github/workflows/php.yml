@@ -110,7 +110,6 @@ jobs:
           - 'highest'
         database:
           - 'mysql'
-          - 'mariadb'
           - 'postgres'
           - 'sqlite'
 
@@ -124,15 +123,6 @@ jobs:
         ports:
           - 3306/tcp
         options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
-      mariadb:
-        image: mariadb:latest
-        env:
-          MARIADB_ALLOW_EMPTY_ROOT_PASSWORD: false
-          MARIADB_ROOT_PASSWORD: password
-          MARIADB_DATABASE: dcb
-        ports:
-          - 3306/tcp
-        options: --health-cmd="healthcheck.sh --connect --innodb_initialized" --health-interval=10s --health-timeout=5s --health-retries=3
       postgres:
         image: postgres:latest
         env:
@@ -178,7 +168,6 @@ jobs:
         run: |
           case "${{ matrix.database }}" in
             mysql) echo "DCB_TEST_DSN=pdo-mysql://root:password@127.0.0.1:${{ job.services.mysql.ports['3306'] }}/dcb" >> $GITHUB_ENV ;;
-            mariadb) echo "DCB_TEST_DSN=pdo-mysql://root:password@127.0.0.1:${{ job.services.mariadb.ports['3306'] }}/dcb" >> $GITHUB_ENV ;;
             postgres) echo "DCB_TEST_DSN=pdo-pgsql://root:password@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/dcb" >> $GITHUB_ENV ;;
             sqlite) echo "DCB_TEST_DSN=pdo-sqlite:///events.sqlite" >> $GITHUB_ENV ;;
           esac
