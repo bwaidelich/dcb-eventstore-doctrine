@@ -173,7 +173,7 @@ jobs:
 
       - name: Create PostgreSQL database
         if: matrix.database == 'postgres'
-        run: PGPASSWORD=password psql -h 127.0.0.1 -p ${{ job.services.postgres.ports['5432'] }} -U root -c "CREATE DATABASE ${{ env.DB_NAME }};"
+        run: PGPASSWORD=password psql -h 127.0.0.1 -p ${{ job.services.postgres.ports['5432'] }} -U root -d postgres -c "CREATE DATABASE ${{ env.DB_NAME }};"
 
       - name: Set DSN
         run: |
