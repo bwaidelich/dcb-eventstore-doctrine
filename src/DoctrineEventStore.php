@@ -87,7 +87,7 @@ final class DoctrineEventStore implements EventStore
 
     /**
      * @param AbstractSchemaManager<AbstractPlatform> $schemaManager
-    */
+     */
     private function databaseSchema(AbstractSchemaManager $schemaManager): Schema
     {
         $eventsTable = new Table($this->config->eventTableName, [
