@@ -12,6 +12,7 @@ use Doctrine\DBAL\Platforms\SqlitePlatform;
 use Doctrine\DBAL\Schema\DefaultSchemaManagerFactory;
 use Doctrine\DBAL\Tools\DsnParser;
 use PHPUnit\Framework\Attributes\CoversNothing;
+use PHPUnit\Framework\Attributes\Group;
 use Wwwision\DCBEventStore\EventStore;
 use Wwwision\DCBEventStore\Tests\Integration\EventStoreConcurrencyTestBase;
 use Wwwision\DCBEventStoreDoctrine\DoctrineEventStore;
@@ -32,15 +33,7 @@ final class ConcurrencyTest extends EventStoreConcurrencyTestBase
         $connection = self::connection();
         $eventStore = self::createEventStore();
         $eventStore->setup();
-        if ($connection->getDatabasePlatform() instanceof PostgreSQLPlatform) {
-            $connection->executeStatement('TRUNCATE TABLE ' . self::eventTableName() . ' RESTART IDENTITY');
-        } elseif ($connection->getDatabasePlatform() instanceof SqlitePlatform) {
-            /** @noinspection SqlWithoutWhere */
-            $connection->executeStatement('DELETE FROM ' . self::eventTableName());
-            $connection->executeStatement('DELETE FROM sqlite_sequence WHERE name =\'' . self::eventTableName() . '\'');
-        } else {
-            $connection->executeStatement('TRUNCATE TABLE ' . self::eventTableName());
-        }
+        self::cleanup();
         echo PHP_EOL . 'Prepared tables for ' . $connection->getDatabasePlatform()::class . PHP_EOL;
     }
 
@@ -82,6 +75,12 @@ final class ConcurrencyTest extends EventStoreConcurrencyTestBase
     private static function eventTableName(): string
     {
         return 'dcb_events_test';
+    }
+
+    #[Group('validate')]
+    public function test_validate_events(): void
+    {
+        self::validateEvents();
     }
 
 }

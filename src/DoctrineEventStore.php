@@ -179,19 +179,19 @@ final class DoctrineEventStore implements EventStore
         $unionSelects = implode(' UNION ALL ', $selects);
 
         $statement = "INSERT INTO {$this->config->eventTableName} (type, data, metadata, tags, recorded_at) SELECT * FROM ( $unionSelects ) new_events";
-        $queryBuilder = null;
+        $parameterTypes = [];
         if ($condition !== null) {
-            $queryBuilder = $this->config->connection->createQueryBuilder()->select('events.sequence_number')->from($this->config->eventTableName, 'events')->orderBy('events.sequence_number', 'DESC')->setMaxResults(1);
-            $this->addDcbQueryConstraints($queryBuilder, $condition->failIfEventsMatch);
-            $parameters = [...$parameters, ...$queryBuilder->getParameters()];
-            if ($condition->after === null) {
-                $statement .= ' WHERE NOT EXISTS (' . $queryBuilder->getSQL() . ')';
-            } else {
-                $statement .= ' WHERE (' . $queryBuilder->getSQL() . ') = :highestSequenceNumber';
-                $parameters['highestSequenceNumber'] = $condition->after->value;
+            $conditionQueryBuilder = $this->config->connection->createQueryBuilder()->select('1')->from($this->config->eventTableName, 'events');
+            $this->addDcbQueryConstraints($conditionQueryBuilder, $condition->failIfEventsMatch);
+            if ($condition->after !== null) {
+                $conditionQueryBuilder->andWhere('events.sequence_number > :highestSequenceNumber');
+                $conditionQueryBuilder->setParameter('highestSequenceNumber', $condition->after->value);
             }
+            $parameters = [...$parameters, ...$conditionQueryBuilder->getParameters()];
+            $parameterTypes = $conditionQueryBuilder->getParameterTypes();
+            $statement .= ' WHERE NOT EXISTS (' . $conditionQueryBuilder->getSQL() . ')';
         }
-        $affectedRows = $this->commitStatement($statement, $parameters, $queryBuilder?->getParameterTypes() ?? []);
+        $affectedRows = $this->commitStatement($statement, $parameters, $parameterTypes);
         if ($affectedRows === 0 && $condition !== null) {
             throw $condition->after === null ? ConditionalAppendFailed::becauseMatchingEventsExist() : ConditionalAppendFailed::becauseMatchingEventsExistAfterSequencePosition($condition->after);
         }
@@ -209,12 +209,18 @@ final class DoctrineEventStore implements EventStore
         $maxRetryAttempts = 10;
         $retryAttempt = 0;
         while (true) {
+            $transactionStarted = false;
             try {
                 if ($this->config->isPostgreSQL()) {
                     $this->config->connection->executeStatement('BEGIN ISOLATION LEVEL SERIALIZABLE');
+                    $transactionStarted = true;
+                } elseif ($this->config->isMySQL()) {
+                    $this->config->connection->executeStatement('SET TRANSACTION ISOLATION LEVEL SERIALIZABLE');
+                    $this->config->connection->executeStatement('START TRANSACTION');
+                    $transactionStarted = true;
                 }
                 $affectedRows = (int) $this->config->connection->executeStatement($statement, $parameters, $parameterTypes);
-                if ($this->config->isPostgreSQL()) {
+                if ($transactionStarted) {
                     $this->config->connection->executeStatement('COMMIT');
                 }
                 return $affectedRows;
@@ -228,7 +234,7 @@ final class DoctrineEventStore implements EventStore
             } catch (DbalException $e) {
                 throw new RuntimeException(sprintf('Failed to commit events (error code: %d): %s', (int) $e->getCode(), $e->getMessage()), 1685956215, $e);
             } finally {
-                if ($this->config->isPostgreSQL()) {
+                if ($transactionStarted) {
                     $this->config->connection->executeStatement('ROLLBACK');
                 }
             }

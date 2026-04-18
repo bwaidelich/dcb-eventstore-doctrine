@@ -31,7 +31,7 @@
     "roave/security-advisories": "dev-latest",
     "phpstan/phpstan": "^2",
     "friendsofphp/php-cs-fixer": "^3.88",
-    "phpunit/phpunit": "^11",
+    "phpunit/phpunit": "^12",
     "brianium/paratest": "^7"
   },
   "autoload": {
@@ -51,11 +51,12 @@
     "test:cs:fix": "vendor/bin/php-cs-fixer fix",
     "test:integration": [
       "echo $DCB_TEST_DSN",
-      "phpunit tests/Integration --exclude-group=parallel --exclude-group=feature_liveStream --exclude-group=feature_appendConditionWithoutMatchingEvent"
+      "phpunit tests/Integration --exclude-group=parallel --exclude-group=validate --exclude-group=feature_liveStream --exclude-group=feature_appendConditionWithoutMatchingEvent"
     ],
     "test:consistency": [
       "php scripts/consistency/prepare.php",
       "paratest tests/Integration --group=parallel --functional --processes 20",
+      "phpunit tests/Integration --group=validate",
       "php scripts/consistency/cleanup.php"
     ],
     "test": [
