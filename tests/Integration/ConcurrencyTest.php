@@ -12,6 +12,7 @@ use Doctrine\DBAL\Platforms\SqlitePlatform;
 use Doctrine\DBAL\Schema\DefaultSchemaManagerFactory;
 use Doctrine\DBAL\Tools\DsnParser;
 use PHPUnit\Framework\Attributes\CoversNothing;
+use PHPUnit\Framework\Attributes\Group;
 use Wwwision\DCBEventStore\EventStore;
 use Wwwision\DCBEventStore\Tests\Integration\EventStoreConcurrencyTestBase;
 use Wwwision\DCBEventStoreDoctrine\DoctrineEventStore;
@@ -74,6 +75,12 @@ final class ConcurrencyTest extends EventStoreConcurrencyTestBase
     private static function eventTableName(): string
     {
         return 'dcb_events_test';
+    }
+
+    #[Group('validate')]
+    public function test_validate_events(): void
+    {
+        self::validateEvents();
     }
 
 }
