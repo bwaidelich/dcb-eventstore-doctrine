@@ -173,19 +173,23 @@ final class DoctrineEventStore implements EventStore, Setupable
         $unionSelects = implode(' UNION ALL ', $selects);
 
         $statement = "INSERT INTO {$this->config->eventTableName} (type, data, metadata, tags, recorded_at) SELECT * FROM ( $unionSelects ) new_events";
-        $queryBuilder = null;
+        $parameterTypes = [];
         if (!$condition->expectedHighestSequenceNumber->isAny()) {
-            $queryBuilder = $this->config->connection->createQueryBuilder()->select('events.sequence_number')->from($this->config->eventTableName, 'events')->orderBy('events.sequence_number', 'DESC')->setMaxResults(1);
-            $this->addStreamQueryConstraints($queryBuilder, $condition->query);
-            $parameters = [...$parameters, ...$queryBuilder->getParameters()];
-            if ($condition->expectedHighestSequenceNumber->isNone()) {
-                $statement .= ' WHERE NOT EXISTS (' . $queryBuilder->getSQL() . ')';
-            } else {
-                $statement .= ' WHERE (' . $queryBuilder->getSQL() . ') = :highestSequenceNumber';
-                $parameters['highestSequenceNumber'] = $condition->expectedHighestSequenceNumber->extractSequenceNumber()->value;
+            // Forward NOT EXISTS scan: InnoDB acquires a gap lock on (highestSequenceNumber, supremum]
+            // preventing concurrent inserts of matching events until this transaction commits.
+            $conditionQueryBuilder = $this->config->connection->createQueryBuilder()
+                ->select('1')
+                ->from($this->config->eventTableName, 'events');
+            $this->addStreamQueryConstraints($conditionQueryBuilder, $condition->query);
+            if (!$condition->expectedHighestSequenceNumber->isNone()) {
+                $conditionQueryBuilder->andWhere('events.sequence_number > :highestSequenceNumber');
+                $conditionQueryBuilder->setParameter('highestSequenceNumber', $condition->expectedHighestSequenceNumber->extractSequenceNumber()->value);
             }
+            $parameters = [...$parameters, ...$conditionQueryBuilder->getParameters()];
+            $parameterTypes = $conditionQueryBuilder->getParameterTypes();
+            $statement .= ' WHERE NOT EXISTS (' . $conditionQueryBuilder->getSQL() . ')';
         }
-        $affectedRows = $this->commitStatement($statement, $parameters, $queryBuilder?->getParameterTypes() ?? []);
+        $affectedRows = $this->commitStatement($statement, $parameters, $parameterTypes);
         if ($affectedRows === 0 && !$condition->expectedHighestSequenceNumber->isAny()) {
             throw $condition->expectedHighestSequenceNumber->isNone() ? ConditionalAppendFailed::becauseNoEventWhereExpected() : ConditionalAppendFailed::becauseHighestExpectedSequenceNumberDoesNotMatch($condition->expectedHighestSequenceNumber);
         }
@@ -203,12 +207,18 @@ final class DoctrineEventStore implements EventStore, Setupable
         $maxRetryAttempts = 10;
         $retryAttempt = 0;
         while (true) {
+            $transactionStarted = false;
             try {
                 if ($this->config->isPostgreSQL()) {
                     $this->config->connection->executeStatement('BEGIN ISOLATION LEVEL SERIALIZABLE');
+                    $transactionStarted = true;
+                } elseif ($this->config->isMySQL()) {
+                    $this->config->connection->executeStatement('SET TRANSACTION ISOLATION LEVEL SERIALIZABLE');
+                    $this->config->connection->executeStatement('START TRANSACTION');
+                    $transactionStarted = true;
                 }
                 $affectedRows = (int)$this->config->connection->executeStatement($statement, $parameters, $parameterTypes);
-                if ($this->config->isPostgreSQL()) {
+                if ($transactionStarted) {
                     $this->config->connection->executeStatement('COMMIT');
                 }
                 return $affectedRows;
@@ -222,7 +232,7 @@ final class DoctrineEventStore implements EventStore, Setupable
             } catch (DbalException $e) {
                 throw new RuntimeException(sprintf('Failed to commit events (error code: %d): %s', (int)$e->getCode(), $e->getMessage()), 1685956215, $e);
             } finally {
-                if ($this->config->isPostgreSQL()) {
+                if ($transactionStarted) {
                     $this->config->connection->executeStatement('ROLLBACK');
                 }
             }
