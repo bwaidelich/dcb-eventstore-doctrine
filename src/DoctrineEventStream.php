@@ -44,6 +44,11 @@ final class DoctrineEventStream implements EventStream
     private static function databaseRowToEventEnvelope(array $row): EventEnvelope
     {
         Assert::numeric($row['sequence_number']);
+        Assert::string($row['recorded_at']);
+        Assert::string($row['type']);
+        Assert::string($row['data']);
+        Assert::string($row['tags']);
+        Assert::nullOrString($row['metadata']);
         $recordedAt = DateTimeImmutable::createFromFormat('Y-m-d H:i:s', $row['recorded_at']);
         Assert::isInstanceOf($recordedAt, DateTimeImmutable::class);
         return new EventEnvelope(
