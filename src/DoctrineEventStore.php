@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Wwwision\DCBEventStoreDoctrine;
 
 use DateTimeImmutable;
+use Doctrine\DBAL\ArrayParameterType;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Exception as DbalException;
 use Doctrine\DBAL\Exception\DeadlockException;
