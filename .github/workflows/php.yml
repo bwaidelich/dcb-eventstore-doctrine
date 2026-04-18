@@ -20,6 +20,7 @@ jobs:
       matrix:
         php-version:
           - '8.5'
+          - '8.4'
         dependencies:
           - 'highest'
         database:
