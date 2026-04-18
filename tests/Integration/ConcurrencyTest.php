@@ -32,15 +32,7 @@ final class ConcurrencyTest extends EventStoreConcurrencyTestBase
         $connection = self::connection();
         $eventStore = self::createEventStore();
         $eventStore->setup();
-        if ($connection->getDatabasePlatform() instanceof PostgreSQLPlatform) {
-            $connection->executeStatement('TRUNCATE TABLE ' . self::eventTableName() . ' RESTART IDENTITY');
-        } elseif ($connection->getDatabasePlatform() instanceof SqlitePlatform) {
-            /** @noinspection SqlWithoutWhere */
-            $connection->executeStatement('DELETE FROM ' . self::eventTableName());
-            $connection->executeStatement('DELETE FROM sqlite_sequence WHERE name =\'' . self::eventTableName() . '\'');
-        } else {
-            $connection->executeStatement('TRUNCATE TABLE ' . self::eventTableName());
-        }
+        self::cleanup();
         echo PHP_EOL . 'Prepared tables for ' . $connection->getDatabasePlatform()::class . PHP_EOL;
     }
 

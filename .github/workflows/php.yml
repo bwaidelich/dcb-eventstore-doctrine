@@ -33,7 +33,7 @@ jobs:
           MYSQL_ROOT_PASSWORD: password
           MYSQL_DATABASE: dcb
         ports:
-          - 3306/tcp
+          - 3307:3306
         options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
 
     steps:
@@ -41,7 +41,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php-version }}
-          extensions: pdo_mysql, pdo_sqlite, pdo_pgsql
+          extensions: pdo_mysql
 
       - name: Checkout code
         uses: actions/checkout@v6
@@ -70,7 +70,7 @@ jobs:
       - name: Set DSN
         run: |
           case "${{ matrix.database }}" in
-            mysql) echo "DCB_TEST_DSN=pdo-mysql://root:password@127.0.0.1:${{ job.services.mysql.ports['3306'] }}/dcb" >> $GITHUB_ENV ;;
+            mysql) echo "DCB_TEST_DSN=pdo-mysql://root:password@127.0.0.1:3307/dcb" >> $GITHUB_ENV ;;
             postgres) echo "DCB_TEST_DSN=pdo-pgsql://root:password@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/dcb" >> $GITHUB_ENV ;;
             sqlite) echo "DCB_TEST_DSN=pdo-sqlite:///events.sqlite" >> $GITHUB_ENV ;;
           esac
