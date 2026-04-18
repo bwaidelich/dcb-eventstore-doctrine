@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Wwwision\DCBEventStoreDoctrine;
 
 use DateTimeImmutable;
-use Doctrine\DBAL\ArrayParameterType;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Exception as DbalException;
 use Doctrine\DBAL\Exception\DeadlockException;
@@ -196,7 +195,7 @@ final class DoctrineEventStore implements EventStore
 
     /**
      * @param array<int<0, max>|string, mixed> $parameters
-     * @param array<int<0, max>|string, ArrayParameterType|ParameterType|Type|string> $parameterTypes
+     * @param array<int<0, max>|string, ParameterType|Type|string> $parameterTypes
      */
     private function commitStatement(string $statement, array $parameters, array $parameterTypes): int
     {
@@ -255,9 +254,13 @@ final class DoctrineEventStore implements EventStore
     private function applyDcbQueryItemConstraints(QueryBuilder $queryBuilder, QueryItem $dcbQueryItem): void
     {
         if ($dcbQueryItem->eventTypes !== null) {
-            $eventTypesParameterName = $this->config->createUniqueParameterName();
-            $queryBuilder->andWhere("type IN (:$eventTypesParameterName)");
-            $queryBuilder->setParameter($eventTypesParameterName, $dcbQueryItem->eventTypes->toStringArray(), ArrayParameterType::STRING);
+            $placeholders = [];
+            foreach ($dcbQueryItem->eventTypes->toStringArray() as $eventType) {
+                $paramName = $this->config->createUniqueParameterName();
+                $placeholders[] = ':' . $paramName;
+                $queryBuilder->setParameter($paramName, $eventType);
+            }
+            $queryBuilder->andWhere('type IN (' . implode(', ', $placeholders) . ')');
         }
         if ($dcbQueryItem->tags !== null) {
             $tagsParameterName = $this->config->createUniqueParameterName();
