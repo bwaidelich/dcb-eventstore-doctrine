@@ -254,13 +254,9 @@ final class DoctrineEventStore implements EventStore
     private function applyDcbQueryItemConstraints(QueryBuilder $queryBuilder, QueryItem $dcbQueryItem): void
     {
         if ($dcbQueryItem->eventTypes !== null) {
-            $placeholders = [];
-            foreach ($dcbQueryItem->eventTypes->toStringArray() as $eventType) {
-                $paramName = $this->config->createUniqueParameterName();
-                $placeholders[] = ':' . $paramName;
-                $queryBuilder->setParameter($paramName, $eventType);
-            }
-            $queryBuilder->andWhere('type IN (' . implode(', ', $placeholders) . ')');
+            $eventTypesParameterName = $this->config->createUniqueParameterName();
+            $queryBuilder->andWhere("type IN (:$eventTypesParameterName)");
+            $queryBuilder->setParameter($eventTypesParameterName, $dcbQueryItem->eventTypes->toStringArray(), ArrayParameterType::STRING);
         }
         if ($dcbQueryItem->tags !== null) {
             $tagsParameterName = $this->config->createUniqueParameterName();
