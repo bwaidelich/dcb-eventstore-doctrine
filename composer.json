@@ -32,7 +32,7 @@
     "phpstan/phpstan": "^2",
     "friendsofphp/php-cs-fixer": "^3.88",
     "phpunit/phpunit": "^12.1",
-    "brianium/paratest": "^7.9"
+    "brianium/paratest": "^7.10.3"
   },
   "autoload": {
     "psr-4": {
