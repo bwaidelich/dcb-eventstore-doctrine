@@ -55,6 +55,17 @@ jobs:
             health-cmd: 'pg_isready'
             extension: 'pdo_pgsql'
 
+        exclude:
+          - php-version: 'latest'
+            dependencies: 'lowest'
+            database:
+              image: 'postgres:16'
+
+          - php-version: 'latest'
+            dependencies: 'lowest'
+            database:
+              image: 'postgres:17'
+
     services:
       database:
         image: ${{ matrix.database.image }}
