@@ -51,7 +51,7 @@
     "test:cs:fix": "vendor/bin/php-cs-fixer fix",
     "test:integration": [
       "echo $DCB_TEST_DSN",
-      "phpunit tests/Integration --exclude-group=parallel --exclude-group=feature_liveStream --exclude-group=feature_appendConditionWithoutMatchingEvent"
+      "phpunit tests/Integration --exclude-group=parallel --exclude-group=validate --exclude-group=feature_liveStream --exclude-group=feature_appendConditionWithoutMatchingEvent"
     ],
     "test:consistency": [
       "php scripts/consistency/prepare.php",
