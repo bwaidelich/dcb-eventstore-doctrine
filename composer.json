@@ -31,8 +31,8 @@
     "roave/security-advisories": "dev-latest",
     "phpstan/phpstan": "^2",
     "friendsofphp/php-cs-fixer": "^3.88",
-    "phpunit/phpunit": "^12",
-    "brianium/paratest": "^7"
+    "phpunit/phpunit": "^12.1",
+    "brianium/paratest": "^7.9"
   },
   "autoload": {
     "psr-4": {

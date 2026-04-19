@@ -227,6 +227,14 @@ final class DoctrineEventStore implements EventStore
                 $retryAttempt++;
                 $retryWaitInterval *= 2;
             } catch (DbalException $e) {
+                // MariaDB error 1467 ("Failed to read auto-increment value from storage engine") is a transient
+                // concurrency failure under SERIALIZABLE isolation — treat it like a deadlock and retry
+                if ((int) $e->getCode() === 1467 && $retryAttempt < $maxRetryAttempts) {
+                    usleep((int) ($retryWaitInterval * 1E6));
+                    $retryAttempt++;
+                    $retryWaitInterval *= 2;
+                    continue;
+                }
                 throw new RuntimeException(sprintf('Failed to commit events (error code: %d): %s', (int) $e->getCode(), $e->getMessage()), 1685956215, $e);
             } finally {
                 if ($transactionStarted) {
