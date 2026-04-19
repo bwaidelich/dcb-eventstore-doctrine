@@ -196,7 +196,7 @@ final class DoctrineEventStore implements EventStore
 
     /**
      * @param array<int<0, max>|string, mixed> $parameters
-     * @param array<int<0, max>|string, ParameterType|Type|string> $parameterTypes
+     * @param array<int<0, max>|string, ArrayParameterType|ParameterType|Type|string> $parameterTypes
      */
     private function commitStatement(string $statement, array $parameters, array $parameterTypes): int
     {
@@ -205,14 +205,20 @@ final class DoctrineEventStore implements EventStore
         $retryAttempt = 0;
         while (true) {
             $transactionStarted = false;
+            $mysqlAdvisoryLockName = null;
             try {
                 if ($this->config->isPostgreSQL()) {
                     $this->config->connection->executeStatement('BEGIN ISOLATION LEVEL SERIALIZABLE');
                     $transactionStarted = true;
                 } elseif ($this->config->isMySQL()) {
-                    $this->config->connection->executeStatement('SET TRANSACTION ISOLATION LEVEL SERIALIZABLE');
-                    $this->config->connection->executeStatement('START TRANSACTION');
-                    $transactionStarted = true;
+                    // MySQL's SERIALIZABLE isolation does not acquire gap locks for complex INSERT...WHERE NOT EXISTS
+                    // queries with derived subqueries, allowing phantom reads. We use an advisory lock instead to
+                    // guarantee mutual exclusion during the check-then-insert operation.
+                    $mysqlAdvisoryLockName = 'dcb_' . $this->config->eventTableName;
+                    $lockAcquired = $this->config->connection->fetchOne('SELECT GET_LOCK(?, 30)', [$mysqlAdvisoryLockName]);
+                    if ($lockAcquired !== '1') {
+                        throw new RuntimeException(sprintf('Failed to acquire advisory lock "%s" for event store append', $mysqlAdvisoryLockName));
+                    }
                 }
                 $affectedRows = (int) $this->config->connection->executeStatement($statement, $parameters, $parameterTypes);
                 if ($transactionStarted) {
@@ -239,6 +245,13 @@ final class DoctrineEventStore implements EventStore
             } finally {
                 if ($transactionStarted) {
                     $this->config->connection->executeStatement('ROLLBACK');
+                }
+                if ($mysqlAdvisoryLockName !== null) {
+                    try {
+                        $this->config->connection->fetchOne('SELECT RELEASE_LOCK(?)', [$mysqlAdvisoryLockName]);
+                    } catch (\Throwable) {
+                        // ignore – connection may already be closed
+                    }
                 }
             }
         }
