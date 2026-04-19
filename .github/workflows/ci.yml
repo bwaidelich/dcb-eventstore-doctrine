@@ -12,6 +12,7 @@ permissions:
 jobs:
 
   integration-tests:
+    name: integration-tests (PHP ${{ matrix.php-version }}, ${{ matrix.dependencies }} deps, ${{ matrix.database.image }})
     runs-on: ubuntu-latest
 
     strategy:
@@ -55,16 +56,7 @@ jobs:
             health-cmd: 'pg_isready'
             extension: 'pdo_pgsql'
 
-        exclude:
-          - php-version: 'latest'
-            dependencies: 'lowest'
-            database:
-              image: 'postgres:16'
-
-          - php-version: 'latest'
-            dependencies: 'lowest'
-            database:
-              image: 'postgres:17'
+    continue-on-error: ${{ matrix.php-version == 'latest' && matrix.dependencies == 'lowest' && startsWith(matrix.database.image, 'postgres') }}
 
     services:
       database:
