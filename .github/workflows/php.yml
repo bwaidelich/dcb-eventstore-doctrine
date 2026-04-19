@@ -121,7 +121,6 @@ jobs:
         php-version:
           - '8.4'
         dependencies:
-          - 'lowest'
           - 'highest'
 
     steps:
