@@ -8,7 +8,7 @@ use Doctrine\DBAL\Configuration;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\DriverManager;
 use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
-use Doctrine\DBAL\Platforms\SqlitePlatform;
+use Doctrine\DBAL\Platforms\SQLitePlatform;
 use Doctrine\DBAL\Schema\DefaultSchemaManagerFactory;
 use Doctrine\DBAL\Tools\DsnParser;
 use PHPUnit\Framework\Attributes\CoversNothing;
@@ -32,6 +32,9 @@ final class ConcurrencyTest extends EventStoreConcurrencyTestBase
     {
         $connection = self::connection();
         $eventStore = self::createEventStore();
+        if (!$eventStore instanceof DoctrineEventStore) {
+            self::fail('Expected ' . DoctrineEventStore::class . ', got ' . $eventStore::class);
+        }
         $eventStore->setup();
         self::cleanup();
         echo PHP_EOL . 'Prepared tables for ' . $connection->getDatabasePlatform()::class . PHP_EOL;
@@ -40,7 +43,7 @@ final class ConcurrencyTest extends EventStoreConcurrencyTestBase
     public static function cleanup(): void
     {
         $connection = self::connection();
-        if ($connection->getDatabasePlatform() instanceof SqlitePlatform) {
+        if ($connection->getDatabasePlatform() instanceof SQLitePlatform) {
             $connection->executeStatement('DELETE FROM ' . self::eventTableName());
             $connection->executeStatement('UPDATE SQLITE_SEQUENCE SET SEQ=0 WHERE NAME="' . self::eventTableName() . '"');
         } elseif ($connection->getDatabasePlatform() instanceof PostgreSQLPlatform) {

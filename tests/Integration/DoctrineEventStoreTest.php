@@ -7,7 +7,7 @@ namespace Wwwision\DCBEventStoreDoctrine\Tests\Integration;
 use Doctrine\DBAL\Configuration;
 use Doctrine\DBAL\DriverManager;
 use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
-use Doctrine\DBAL\Platforms\SqlitePlatform;
+use Doctrine\DBAL\Platforms\SQLitePlatform;
 use Doctrine\DBAL\Schema\DefaultSchemaManagerFactory;
 use Doctrine\DBAL\Tools\DsnParser;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -38,7 +38,7 @@ final class DoctrineEventStoreTest extends EventStoreTestBase
             ->withClock($this->getTestClock());
         $eventStore = new DoctrineEventStore($eventStoreConfiguration);
         $eventStore->setup();
-        if ($connection->getDatabasePlatform() instanceof SqlitePlatform) {
+        if ($connection->getDatabasePlatform() instanceof SQLitePlatform) {
             $connection->executeStatement('DELETE FROM ' . $eventTableName);
             $connection->executeStatement('UPDATE SQLITE_SEQUENCE SET SEQ=0 WHERE NAME="' . $eventTableName . '"');
         } elseif ($connection->getDatabasePlatform() instanceof PostgreSQLPlatform) {
