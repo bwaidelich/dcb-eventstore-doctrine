@@ -216,7 +216,7 @@ final class DoctrineEventStore implements EventStore
                     // guarantee mutual exclusion during the check-then-insert operation.
                     $mysqlAdvisoryLockName = 'dcb_' . $this->config->eventTableName;
                     $lockAcquired = $this->config->connection->fetchOne('SELECT GET_LOCK(?, 30)', [$mysqlAdvisoryLockName]);
-                    if ((int) $lockAcquired !== 1) {
+                    if (!is_numeric($lockAcquired) || (int) $lockAcquired !== 1) {
                         throw new RuntimeException(sprintf('Failed to acquire advisory lock "%s" for event store append', $mysqlAdvisoryLockName));
                     }
                 }
