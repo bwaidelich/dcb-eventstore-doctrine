@@ -112,7 +112,7 @@ jobs:
       - name: Run consistency tests
         run: composer run-script test:consistency
 
-  tests-sqlite:
+  tests-default-db:
     runs-on: ubuntu-latest
 
     strategy:
