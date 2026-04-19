@@ -18,24 +18,35 @@ jobs:
       fail-fast: false
       matrix:
         php-version:
-          - '8.3'
           - '8.4'
-          - '8.5'
         dependencies:
+          - 'lowest'
           - 'highest'
         database:
-          - 'mysql'
+          - image: 'mysql:8.0'
+            health-cmd: 'mysqladmin ping'
+          - image: 'mysql:8.4'
+            health-cmd: 'mysqladmin ping'
+          - image: 'mariadb:10.11'
+            health-cmd: 'mariadb-admin ping'
+          - image: 'mariadb:11.4'
+            health-cmd: 'mariadb-admin ping'
 
     services:
-      mysql:
-        image: mysql:latest
+      database:
+        image: ${{ matrix.database.image }}
         env:
-          MYSQL_ALLOW_EMPTY_PASSWORD: false
           MYSQL_ROOT_PASSWORD: password
           MYSQL_DATABASE: dcb
+          MARIADB_ROOT_PASSWORD: password
+          MARIADB_DATABASE: dcb
         ports:
           - 3307:3306
-        options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
+        options: >-
+          --health-cmd="${{ matrix.database.health-cmd }}"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
 
     steps:
       - name: Setup PHP
@@ -69,12 +80,7 @@ jobs:
         run: composer update --prefer-dist --no-progress
 
       - name: Set DSN
-        run: |
-          case "${{ matrix.database }}" in
-            mysql) echo "DCB_TEST_DSN=pdo-mysql://root:password@127.0.0.1:3307/dcb" >> $GITHUB_ENV ;;
-            postgres) echo "DCB_TEST_DSN=pdo-pgsql://root:password@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/dcb" >> $GITHUB_ENV ;;
-            sqlite) echo "DCB_TEST_DSN=pdo-sqlite:///events.sqlite" >> $GITHUB_ENV ;;
-          esac
+        run: echo "DCB_TEST_DSN=pdo-mysql://root:password@127.0.0.1:3307/dcb" >> $GITHUB_ENV
 
       - name: Run integration tests
         run: composer run-script test:integration
