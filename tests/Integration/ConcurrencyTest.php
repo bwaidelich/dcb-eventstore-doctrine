@@ -8,10 +8,11 @@ use Doctrine\DBAL\Configuration;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\DriverManager;
 use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
-use Doctrine\DBAL\Platforms\SqlitePlatform;
+use Doctrine\DBAL\Platforms\SQLitePlatform;
 use Doctrine\DBAL\Schema\DefaultSchemaManagerFactory;
 use Doctrine\DBAL\Tools\DsnParser;
 use PHPUnit\Framework\Attributes\CoversNothing;
+use PHPUnit\Framework\Attributes\Group;
 use Wwwision\DCBEventStore\EventStore;
 use Wwwision\DCBEventStore\Tests\Integration\EventStoreConcurrencyTestBase;
 use Wwwision\DCBEventStoreDoctrine\DoctrineEventStore;
@@ -31,23 +32,18 @@ final class ConcurrencyTest extends EventStoreConcurrencyTestBase
     {
         $connection = self::connection();
         $eventStore = self::createEventStore();
-        $eventStore->setup();
-        if ($connection->getDatabasePlatform() instanceof PostgreSQLPlatform) {
-            $connection->executeStatement('TRUNCATE TABLE ' . self::eventTableName() . ' RESTART IDENTITY');
-        } elseif ($connection->getDatabasePlatform() instanceof SqlitePlatform) {
-            /** @noinspection SqlWithoutWhere */
-            $connection->executeStatement('DELETE FROM ' . self::eventTableName());
-            $connection->executeStatement('DELETE FROM sqlite_sequence WHERE name =\'' . self::eventTableName() . '\'');
-        } else {
-            $connection->executeStatement('TRUNCATE TABLE ' . self::eventTableName());
+        if (!$eventStore instanceof DoctrineEventStore) {
+            self::fail('Expected ' . DoctrineEventStore::class . ', got ' . $eventStore::class);
         }
+        $eventStore->setup();
+        self::cleanup();
         echo PHP_EOL . 'Prepared tables for ' . $connection->getDatabasePlatform()::class . PHP_EOL;
     }
 
     public static function cleanup(): void
     {
         $connection = self::connection();
-        if ($connection->getDatabasePlatform() instanceof SqlitePlatform) {
+        if ($connection->getDatabasePlatform() instanceof SQLitePlatform) {
             $connection->executeStatement('DELETE FROM ' . self::eventTableName());
             $connection->executeStatement('UPDATE SQLITE_SEQUENCE SET SEQ=0 WHERE NAME="' . self::eventTableName() . '"');
         } elseif ($connection->getDatabasePlatform() instanceof PostgreSQLPlatform) {
@@ -82,6 +78,12 @@ final class ConcurrencyTest extends EventStoreConcurrencyTestBase
     private static function eventTableName(): string
     {
         return 'dcb_events_test';
+    }
+
+    #[Group('validate')]
+    public function test_validate_events(): void
+    {
+        self::validateEvents();
     }
 
 }
