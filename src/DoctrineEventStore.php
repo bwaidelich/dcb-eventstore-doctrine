@@ -174,19 +174,19 @@ final class DoctrineEventStore implements EventStore
         $unionSelects = implode(' UNION ALL ', $selects);
 
         $statement = "INSERT INTO {$this->config->eventTableName} (type, data, metadata, tags, recorded_at) SELECT * FROM ( $unionSelects ) new_events";
-        $queryBuilder = null;
+        $parameterTypes = [];
         if ($condition !== null) {
-            $queryBuilder = $this->config->connection->createQueryBuilder()->select('events.sequence_number')->from($this->config->eventTableName, 'events')->orderBy('events.sequence_number', 'DESC')->setMaxResults(1);
-            $this->addDcbQueryConstraints($queryBuilder, $condition->failIfEventsMatch);
-            $parameters = [...$parameters, ...$queryBuilder->getParameters()];
-            if ($condition->after === null) {
-                $statement .= ' WHERE NOT EXISTS (' . $queryBuilder->getSQL() . ')';
-            } else {
-                $statement .= ' WHERE (' . $queryBuilder->getSQL() . ') = :highestSequenceNumber';
-                $parameters['highestSequenceNumber'] = $condition->after->value;
+            $conditionQueryBuilder = $this->config->connection->createQueryBuilder()->select('1')->from($this->config->eventTableName, 'events');
+            $this->addDcbQueryConstraints($conditionQueryBuilder, $condition->failIfEventsMatch);
+            if ($condition->after !== null) {
+                $conditionQueryBuilder->andWhere('events.sequence_number > :highestSequenceNumber');
+                $conditionQueryBuilder->setParameter('highestSequenceNumber', $condition->after->value);
             }
+            $parameters = [...$parameters, ...$conditionQueryBuilder->getParameters()];
+            $parameterTypes = $conditionQueryBuilder->getParameterTypes();
+            $statement .= ' WHERE NOT EXISTS (' . $conditionQueryBuilder->getSQL() . ')';
         }
-        $affectedRows = $this->commitStatement($statement, $parameters, $queryBuilder?->getParameterTypes() ?? []);
+        $affectedRows = $this->commitStatement($statement, $parameters, $parameterTypes);
         if ($affectedRows === 0 && $condition !== null) {
             throw $condition->after === null ? ConditionalAppendFailed::becauseMatchingEventsExist() : ConditionalAppendFailed::becauseMatchingEventsExistAfterSequencePosition($condition->after);
         }
@@ -204,12 +204,24 @@ final class DoctrineEventStore implements EventStore
         $maxRetryAttempts = 10;
         $retryAttempt = 0;
         while (true) {
+            $transactionStarted = false;
+            $mysqlAdvisoryLockName = null;
             try {
                 if ($this->config->isPostgreSQL()) {
                     $this->config->connection->executeStatement('BEGIN ISOLATION LEVEL SERIALIZABLE');
+                    $transactionStarted = true;
+                } elseif ($this->config->isMySQL()) {
+                    // MySQL's SERIALIZABLE isolation does not acquire gap locks for complex INSERT...WHERE NOT EXISTS
+                    // queries with derived subqueries, allowing phantom reads. We use an advisory lock instead to
+                    // guarantee mutual exclusion during the check-then-insert operation.
+                    $mysqlAdvisoryLockName = 'dcb_' . $this->config->eventTableName;
+                    $lockAcquired = $this->config->connection->fetchOne('SELECT GET_LOCK(?, 30)', [$mysqlAdvisoryLockName]);
+                    if (!is_numeric($lockAcquired) || (int) $lockAcquired !== 1) {
+                        throw new RuntimeException(sprintf('Failed to acquire advisory lock "%s" for event store append', $mysqlAdvisoryLockName));
+                    }
                 }
                 $affectedRows = (int) $this->config->connection->executeStatement($statement, $parameters, $parameterTypes);
-                if ($this->config->isPostgreSQL()) {
+                if ($transactionStarted) {
                     $this->config->connection->executeStatement('COMMIT');
                 }
                 return $affectedRows;
@@ -221,10 +233,25 @@ final class DoctrineEventStore implements EventStore
                 $retryAttempt++;
                 $retryWaitInterval *= 2;
             } catch (DbalException $e) {
+                // MariaDB error 1467 ("Failed to read auto-increment value from storage engine") is a transient
+                // concurrency failure under SERIALIZABLE isolation — treat it like a deadlock and retry
+                if ((int) $e->getCode() === 1467 && $retryAttempt < $maxRetryAttempts) {
+                    usleep((int) ($retryWaitInterval * 1E6));
+                    $retryAttempt++;
+                    $retryWaitInterval *= 2;
+                    continue;
+                }
                 throw new RuntimeException(sprintf('Failed to commit events (error code: %d): %s', (int) $e->getCode(), $e->getMessage()), 1685956215, $e);
             } finally {
-                if ($this->config->isPostgreSQL()) {
+                if ($transactionStarted) {
                     $this->config->connection->executeStatement('ROLLBACK');
+                }
+                if ($mysqlAdvisoryLockName !== null) {
+                    try {
+                        $this->config->connection->fetchOne('SELECT RELEASE_LOCK(?)', [$mysqlAdvisoryLockName]);
+                    } catch (\Throwable) {
+                        // ignore – connection may already be closed
+                    }
                 }
             }
         }
