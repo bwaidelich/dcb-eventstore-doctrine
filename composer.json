@@ -24,15 +24,15 @@
     "ramsey/uuid": "^4.7",
     "psr/clock": "^1",
     "webmozart/assert": "^1.11",
-    "doctrine/dbal": "^4",
-    "wwwision/dcb-eventstore": "^5"
+    "doctrine/dbal": "^3.6 || ^4",
+    "wwwision/dcb-eventstore": "^5.0.1"
   },
   "require-dev": {
     "roave/security-advisories": "dev-latest",
     "phpstan/phpstan": "^2",
     "friendsofphp/php-cs-fixer": "^3.88",
-    "phpunit/phpunit": "^11",
-    "brianium/paratest": "^7"
+    "phpunit/phpunit": "^12.1",
+    "brianium/paratest": "^7.10.3"
   },
   "autoload": {
     "psr-4": {
