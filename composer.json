@@ -23,7 +23,7 @@
     "php": ">=8.3",
     "ramsey/uuid": "^4.7",
     "psr/clock": "^1",
-    "webmozart/assert": "^1.11",
+    "webmozart/assert": "^1.11 || ^2",
     "doctrine/dbal": "^3.6 || ^4",
     "wwwision/dcb-eventstore": "^5.0.1"
   },
