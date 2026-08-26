@@ -13,10 +13,7 @@ use Doctrine\DBAL\ParameterType;
 use Doctrine\DBAL\Platforms\AbstractPlatform;
 use Doctrine\DBAL\Query\QueryBuilder;
 use Doctrine\DBAL\Schema\AbstractSchemaManager;
-use Doctrine\DBAL\Schema\Column;
-use Doctrine\DBAL\Schema\Index;
 use Doctrine\DBAL\Schema\Schema;
-use Doctrine\DBAL\Schema\Table;
 use Doctrine\DBAL\Types\Type;
 use Doctrine\DBAL\Types\Types;
 use JsonException;
@@ -90,37 +87,38 @@ final class DoctrineEventStore implements EventStore
     */
     private function databaseSchema(AbstractSchemaManager $schemaManager): Schema
     {
-        $eventsTable = new Table($this->config->eventTableName, [
+        $schemaConfiguration = $schemaManager->createSchemaConfig();
+        $defaultTableOptions = $schemaConfiguration->getDefaultTableOptions();
+        if (!isset($defaultTableOptions['charset']) && !$this->config->isSQLite()) {
+            $defaultTableOptions['charset'] = 'utf8mb4';
+            $schemaConfiguration->setDefaultTableOptions($defaultTableOptions);
+        }
+        $schema = new Schema(schemaConfig: $schemaConfiguration);
 
-            (new Column('sequence_number', Type::getType($this->config->isSQLite() ? Types::INTEGER : Types::BIGINT)))
-                ->setUnsigned(true)
-                ->setAutoincrement(true),
+        $eventsTable = $schema->createTable($this->config->eventTableName);
+        $eventsTable->addColumn('sequence_number', $this->config->isSQLite() ? Types::INTEGER : Types::BIGINT)
+            ->setAutoincrement(true)
+            ->setUnsigned(true);
 
-            (new Column('type', Type::getType(Types::STRING)))
-                ->setLength(EventType::LENGTH_MAX)
-                ->setPlatformOptions($this->config->isSQLite() ? [] : ['charset' => 'ascii']),
+        $eventsTable->addColumn('type', Types::STRING)
+            ->setLength(EventType::LENGTH_MAX)
+            ->setPlatformOptions($this->config->isSQLite() ? [] : ['charset' => 'ascii']);
 
-            (new Column('data', Type::getType(Types::TEXT))),
+        $eventsTable->addColumn('data', Types::TEXT);
 
-            (new Column('metadata', Type::getType(Types::JSON)))
-                ->setNotnull(false)
-                ->setPlatformOptions($this->config->isPostgreSQL() ? ['jsonb' => true] : []),
+        $eventsTable->addColumn('metadata', Types::JSON)
+            ->setNotnull(false)
+            ->setPlatformOptions($this->config->isPostgreSQL() ? ['jsonb' => true] : []);
 
-            (new Column('tags', Type::getType(Types::JSON)))
-                ->setPlatformOptions($this->config->isPostgreSQL() ? ['jsonb' => true] : []),
+        $eventsTable->addColumn('tags', Types::JSON)
+            ->setPlatformOptions($this->config->isPostgreSQL() ? ['jsonb' => true] : []);
 
-            (new Column('recorded_at', Type::getType(Types::DATETIME_IMMUTABLE))),
-        ], [
-            new Index('idx_type', ['type']),
-            new Index('idx_type_sequence_number', ['type', 'sequence_number']),
-        ]);
+        $eventsTable->addColumn('recorded_at', Types::DATETIME_IMMUTABLE);
+        $eventsTable->addIndex(['type'], 'idx_type');
+        $eventsTable->addIndex(['type', 'sequence_number'], 'idx_type_sequence_number');
         $eventsTable->setPrimaryKey(['sequence_number']);
 
-        $schemaConfiguration = $schemaManager->createSchemaConfig();
-        if (!$this->config->isSQLite()) {
-            $schemaConfiguration->setDefaultTableOptions(['charset' => 'utf8mb4']);
-        }
-        return new Schema([$eventsTable], [], $schemaConfiguration);
+        return $schema;
     }
 
     public function read(Query $query, ReadOptions|null $options = null): SequencedEvents
