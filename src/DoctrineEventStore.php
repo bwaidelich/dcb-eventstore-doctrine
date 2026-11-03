@@ -164,7 +164,9 @@ final class DoctrineEventStore implements EventStore
 
     public function read(Query $query, ReadOptions|null $options = null): SequencedEvents
     {
-        return self::fetchSequencedEvents($this->createReadQueryBuilder($query, $options));
+        $queryBuilder = $this->createReadQueryBuilder($options);
+        $this->addDcbQueryConstraints($queryBuilder, $query);
+        return self::fetchSequencedEvents($queryBuilder);
     }
 
     /**
@@ -192,7 +194,8 @@ final class DoctrineEventStore implements EventStore
         if ($until !== null && $options !== null && $options->backwards) {
             throw new InvalidArgumentException('Partitioned reads do not support "until" when reading backwards', 1793664003);
         }
-        $queryBuilder = $this->createReadQueryBuilder($query, $options);
+        $queryBuilder = $this->createReadQueryBuilder($options);
+        $this->addDcbQueryWhereConstraints($queryBuilder, $query);
         if ($until !== null) {
             $queryBuilder->andWhere('events.sequence_number <= :until')->setParameter('until', $until->value, ParameterType::INTEGER);
         }
@@ -219,7 +222,7 @@ final class DoctrineEventStore implements EventStore
         return "(SELECT 1 FROM JSON_TABLE(events.tags, '$[*]' COLUMNS (tag VARCHAR(" . Tag::LENGTH_MAX . ") PATH '$')) partition_tags WHERE CAST(LEFT(partition_tags.tag, :partitionPrefixLength) AS BINARY) = CAST(:partitionPrefix AS BINARY) AND CAST(CONV(SUBSTR(SHA2(partition_tags.tag, 256), 1, 8), 16, 10) AS UNSIGNED) % :partitions = :partition LIMIT 1) IS NOT NULL";
     }
 
-    private function createReadQueryBuilder(Query $query, ReadOptions|null $options): QueryBuilder
+    private function createReadQueryBuilder(ReadOptions|null $options): QueryBuilder
     {
         $backwards = $options->backwards ?? false;
         $queryBuilder = $this->config->connection->createQueryBuilder()
@@ -230,7 +233,6 @@ final class DoctrineEventStore implements EventStore
             $operator = $backwards ? '<=' : '>=';
             $queryBuilder->andWhere('events.sequence_number ' . $operator . ' :minimumPosition')->setParameter('minimumPosition', $options->from->value);
         }
-        $this->addDcbQueryConstraints($queryBuilder, $query);
         if ($options !== null && $options->limit !== null) {
             $queryBuilder->setMaxResults($options->limit);
         }
@@ -407,27 +409,56 @@ final class DoctrineEventStore implements EventStore
         $queryBuilder->innerJoin('events', '(' . $joinQueryBuilder->getSQL() . ')', 'eh', 'eh.sequence_number = events.sequence_number');
     }
 
+    /**
+     * Alternative to {@see self::addDcbQueryConstraints()} for queries without "onlyLastEvent" that doesn't need a derived table.
+     * MySQL and MariaDB materialize that table with all matching events regardless of the requested position and limit.
+     */
+    private function addDcbQueryWhereConstraints(QueryBuilder $queryBuilder, Query $dcbQuery): void
+    {
+        if (!$dcbQuery->hasItems()) {
+            return;
+        }
+        $this->config->resetUniqueParameterCount();
+        $itemConditions = [];
+        foreach ($dcbQuery as $dcbQueryItem) {
+            $itemConditions[] = '(' . implode(' AND ', $this->dcbQueryItemConditions($queryBuilder, $dcbQueryItem)) . ')';
+        }
+        $queryBuilder->andWhere('(' . implode(' OR ', $itemConditions) . ')');
+    }
+
     private function applyDcbQueryItemConstraints(QueryBuilder $queryBuilder, QueryItem $dcbQueryItem): void
     {
+        foreach ($this->dcbQueryItemConditions($queryBuilder, $dcbQueryItem) as $condition) {
+            $queryBuilder->andWhere($condition);
+        }
+        if ($dcbQueryItem->onlyLastEvent) {
+            $queryBuilder->select('MAX(sequence_number) AS sequence_number');
+        }
+    }
+
+    /**
+     * @return list<string> conditions that have to be combined with AND. The required parameters are added to the $queryBuilder
+     */
+    private function dcbQueryItemConditions(QueryBuilder $queryBuilder, QueryItem $dcbQueryItem): array
+    {
+        $conditions = [];
         if ($dcbQueryItem->eventTypes !== null) {
             $eventTypesParameterName = $this->config->createUniqueParameterName();
-            $queryBuilder->andWhere("type IN (:$eventTypesParameterName)");
+            $conditions[] = "type IN (:$eventTypesParameterName)";
             $queryBuilder->setParameter($eventTypesParameterName, $dcbQueryItem->eventTypes->toStringArray(), ArrayParameterType::STRING);
         }
         if ($dcbQueryItem->tags !== null) {
             $tagsParameterName = $this->config->createUniqueParameterName();
             if ($this->config->isSQLite()) {
-                $queryBuilder->andWhere("NOT EXISTS(SELECT value FROM JSON_EACH(:$tagsParameterName) WHERE value NOT IN (SELECT value FROM JSON_EACH(tags)))");
+                $conditions[] = "NOT EXISTS(SELECT value FROM JSON_EACH(:$tagsParameterName) WHERE value NOT IN (SELECT value FROM JSON_EACH(tags)))";
             } elseif ($this->config->isPostgreSQL()) {
-                $queryBuilder->andWhere("tags @> :$tagsParameterName::jsonb");
+                $conditions[] = "tags @> :$tagsParameterName::jsonb";
             } else {
-                $queryBuilder->andWhere("JSON_CONTAINS(tags, :$tagsParameterName)");
+                $conditions[] = "JSON_CONTAINS(tags, :$tagsParameterName)";
             }
             $queryBuilder->setParameter($tagsParameterName, json_encode($dcbQueryItem->tags, JSON_THROW_ON_ERROR));
         }
-        if ($dcbQueryItem->onlyLastEvent) {
-            $queryBuilder->select('MAX(sequence_number) AS sequence_number');
-        }
+        return $conditions;
     }
 
     /**

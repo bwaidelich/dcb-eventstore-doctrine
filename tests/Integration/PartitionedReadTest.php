@@ -298,6 +298,37 @@ final class PartitionedReadTest extends TestCase
     }
 
     #[Test]
+    public function an_event_matching_several_query_items_is_returned_once(): void
+    {
+        $this->skipOnSQLite();
+        $this->eventStore->append(Event::create('TypeA', 'a', ['cart:1', 'product:1']));
+        $this->eventStore->append(Event::create('TypeB', 'b', ['cart:1', 'product:2']));
+
+        self::assertSame([1], $this->positions(TagPartition::create('cart:', 1, 0), Query::fromItems(
+            QueryItem::create(eventTypes: 'TypeA'),
+            QueryItem::create(tags: 'product:1'),
+            QueryItem::create(eventTypes: ['TypeA', 'TypeC'], tags: ['cart:1', 'product:1']),
+        )));
+    }
+
+    #[Test]
+    public function query_items_are_combined_with_the_other_constraints_as_a_whole(): void
+    {
+        $this->skipOnSQLite();
+        $this->eventStore->append(Event::create('TypeA', 'a', ['cart:1']));
+        $this->eventStore->append(Event::create('TypeB', 'b', ['cart:1']));
+        $this->eventStore->append(Event::create('TypeA', 'c', ['product:1']));
+        $this->eventStore->append(Event::create('TypeB', 'd', ['product:1']));
+        $this->eventStore->append(Event::create('TypeA', 'e', ['cart:1']));
+        $query = Query::fromItems(QueryItem::create(eventTypes: 'TypeA'), QueryItem::create(eventTypes: 'TypeB'));
+
+        self::assertSame([1, 2, 5], $this->positions(TagPartition::create('cart:', 1, 0), $query));
+        self::assertSame([2, 5], $this->positions(TagPartition::create('cart:', 1, 0), $query, ReadOptions::create(from: 2)));
+        self::assertSame([1, 2], $this->positions(TagPartition::create('cart:', 1, 0), $query, until: SequencePosition::fromInteger(3)));
+        self::assertSame([5, 2], $this->positions(TagPartition::create('cart:', 1, 0), $query, ReadOptions::create(backwards: true, limit: 2)));
+    }
+
+    #[Test]
     public function readPartition_rejects_query_items_with_onlyLastEvent(): void
     {
         $this->skipOnSQLite();

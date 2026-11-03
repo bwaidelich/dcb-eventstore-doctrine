@@ -85,7 +85,7 @@ $events = $eventStore->readPartition($partition, Query::all(), ReadOptions::crea
 | Several matching tags | The event is returned by every partition that owns one of them, so partitions can overlap. Otherwise the owner of the other tag would silently miss it. A worker uses `TagPartition::contains()` to determine the tags it owns |
 | No matching tag | The event isn't returned by any partition |
 | Prefix | Literal and case-sensitive. `LIKE` is not an option because `_` is valid in tags, and `my_cart:%` would match `myXcart:1`. A trailing colon isn't enforced, so `cart` matches `cartoon:1` |
-| Query | ANDed with the partition, through the same constraints as `read()`. `onlyLastEvent` is rejected, because the maximum is determined before the partition filter applies and the result would look valid but be mostly empty |
+| Query | ANDed with the partition. `onlyLastEvent` is rejected, because the maximum is determined before the partition filter applies and the result would look valid but be mostly empty. Without `onlyLastEvent`, the query items can be part of the `WHERE` clause instead of the derived table of `read()`, which MySQL and MariaDB materialize with all matching events regardless of the position and limit |
 | `until` | Inclusive and forward-only. Without it, a worker only learns the positions of hits, so a worker with a rare prefix rescans everything since its last hit on every poll, regardless of `limit` |
 | Checkpoint | The last event's position if a batch reached `limit`, otherwise `until`. This is safe because a lower position can't become visible after a higher one (see above) |
 | `head()` | `MAX(sequence_number)`, available on all platforms. It must never read the sequence or `AUTO_INCREMENT` counter: those are ahead of the committed events while an append is in flight, so a worker would checkpoint past events it hasn't seen |
@@ -102,7 +102,7 @@ $events = $eventStore->readPartition($partition, Query::all(), ReadOptions::crea
 - Partitions can overlap, which is unsuitable for side effects like sending one email per event.
 - Catching up costs a primary key scan per worker, as the GIN index on tags can't serve a prefix or hash.
 - Changing `n` to anything but double or half requires a rebuild, because most tags move.
-- On MySQL, a batch with a type `Query` is much slower than one without (see below), because of the join that is shared with `read()`. Pushing the types into the `WHERE` clause could improve this, but would add a second code path for queries.
+- There are two ways to apply a `Query`. `read()` and append conditions still use the derived table, and have the same cost on MySQL and MariaDB.
 
 Measurements with PHP 8.5 through `readPartition()` and local Docker, best of 3 runs, one client, `partitions: 8`. 41% of the events have a `cart:` tag, 1% have two. These are not production numbers.
 
@@ -111,7 +111,7 @@ Measurements with PHP 8.5 through `readPartition()` and local Docker, best of 3 
 | `read()` of all events, for comparison | 25.5s | 5.0s | 4.7s | 4.7s |
 | Whole partition | 7.3s | 1.5s | 1.5s | 1.5s |
 | Batch of 1000 from the start | 29ms | 29ms | 28ms | 26ms |
-| Batch of 1000 with a type `Query` | 30ms | 28ms | 1096ms | 138ms |
+| Batch of 1000 with a type `Query` | 20ms | 20ms | 26ms | 23ms |
 | Last 50,000 positions with `until` | 76ms | 76ms | 69ms | 68ms |
 | Prefix without matches, `limit: 1000` | 3.8s | 0.7s | 0.9s | 1.2s |
 | `head()` | 0.5ms | 0.5ms | 0.3ms | 0.4ms |
@@ -129,6 +129,8 @@ Measurements with PHP 8.5 through `readPartition()` and local Docker, best of 3 
 **Extending `ReadOptions`:** `final` with a private constructor in the core package.
 
 **Decorator around `EventStore`:** requires private query building of the store, and `EventStore::read()` has no parameter for `until`.
+
+**Derived table of `read()` for the `Query`:** avoids a second way to apply a `Query`, but a batch of 1000 with a type `Query` took 1096ms on MySQL 8.4 and 138ms on MariaDB 11.4 with 1 million events.
 
 **Separate `PartitionedReader`:** would require moving query building and row mapping into a shared class for a single additional caller.
 
