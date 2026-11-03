@@ -108,7 +108,7 @@ Checkpoints belong to the caller, so this package can't enforce the following. A
 
 ### Exceptions
 
-If the database fails, the event store throws a `RuntimeException` with the original exception as `getPrevious()`. This also applies while iterating over read events, because they are fetched lazily.
+If the database fails or JSON can't be converted, the event store throws a `RuntimeException` with the original exception as `getPrevious()`. This also applies while iterating over read events, because they are fetched lazily.
 
 ### Waiting for new events
 

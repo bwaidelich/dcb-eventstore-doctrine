@@ -165,7 +165,7 @@ final class DoctrineEventStore implements EventStore
     }
 
     /**
-     * @throws RuntimeException if the database fails, here or while iterating over the returned events
+     * @throws RuntimeException if the database fails or returns invalid JSON, here or while iterating over the returned events
      */
     public function read(Query $query, ReadOptions|null $options = null): SequencedEvents
     {
@@ -177,7 +177,7 @@ final class DoctrineEventStore implements EventStore
                 $this->addDcbQueryConstraints($queryBuilder, $query);
             }
             return self::fetchSequencedEvents($queryBuilder);
-        } catch (DbalException $e) {
+        } catch (DbalException|JsonException $e) {
             throw self::readFailed($e);
         }
     }
@@ -191,7 +191,7 @@ final class DoctrineEventStore implements EventStore
      * the last event if the batch reached the limit, or after $until otherwise. See README.
      *
      * @param SequencePosition|null $until If specified, only events up to and including this position will be returned. Can't be combined with reading backwards
-     * @throws RuntimeException if the database platform doesn't support partitioned reads (SQLite), or if the database fails, here or while iterating over the returned events
+     * @throws RuntimeException if the database platform doesn't support partitioned reads (SQLite), or if the database fails or returns invalid JSON, here or while iterating over the returned events
      * @throws InvalidArgumentException if the $query contains items with "onlyLastEvent" or if $until is combined with reading backwards
      */
     public function readPartition(TagPartition $partition, Query $query, ReadOptions|null $options = null, SequencePosition|null $until = null): SequencedEvents
@@ -222,7 +222,7 @@ final class DoctrineEventStore implements EventStore
                 $queryBuilder->setParameter('partitionPrefixLength', strlen($partition->prefix), ParameterType::INTEGER);
             }
             return self::fetchSequencedEvents($queryBuilder);
-        } catch (DbalException $e) {
+        } catch (DbalException|JsonException $e) {
             throw self::readFailed($e);
         }
     }
@@ -282,13 +282,13 @@ final class DoctrineEventStore implements EventStore
                 while (($row = $result->fetchAssociative()) !== false) {
                     yield self::databaseRowToSequencedEvent($row);
                 }
-            } catch (DbalException $e) {
+            } catch (DbalException|JsonException $e) {
                 throw self::readFailed($e);
             }
         });
     }
 
-    private static function readFailed(DbalException $previous): RuntimeException
+    private static function readFailed(DbalException|JsonException $previous): RuntimeException
     {
         return new RuntimeException(sprintf('Failed to read events: %s', $previous->getMessage()), 1793840001, $previous);
     }
@@ -353,7 +353,11 @@ final class DoctrineEventStore implements EventStore
             }
             $parameters['e' . $eventIndex . '_type'] = $event->type->value;
             $parameters['e' . $eventIndex . '_data'] = $event->data->value;
-            $parameters['e' . $eventIndex . '_metadata'] = json_encode($event->metadata->value, JSON_THROW_ON_ERROR);
+            try {
+                $parameters['e' . $eventIndex . '_metadata'] = json_encode($event->metadata->value, JSON_THROW_ON_ERROR);
+            } catch (JsonException $e) {
+                throw new RuntimeException(sprintf('Failed to JSON encode metadata: %s', $e->getMessage()), 1793840004, $e);
+            }
             $parameters['e' . $eventIndex . '_tags'] = $tags;
             $parameters['e' . $eventIndex . '_recordedAt'] = $now->format('Y-m-d H:i:s');
             $eventIndex++;
@@ -373,7 +377,7 @@ final class DoctrineEventStore implements EventStore
                 $parameters = [...$parameters, ...$conditionQueryBuilder->getParameters()];
                 $parameterTypes = $conditionQueryBuilder->getParameterTypes();
                 $statement .= ' WHERE NOT EXISTS (' . $conditionQueryBuilder->getSQL() . ')';
-            } catch (DbalException $e) {
+            } catch (DbalException|JsonException $e) {
                 throw new RuntimeException(sprintf('Failed to build the append condition: %s', $e->getMessage()), 1793840003, $e);
             }
         }

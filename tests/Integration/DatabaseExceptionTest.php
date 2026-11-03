@@ -21,6 +21,7 @@ use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
 use Doctrine\DBAL\Platforms\SQLitePlatform;
 use Doctrine\DBAL\Schema\DefaultSchemaManagerFactory;
 use Doctrine\DBAL\Tools\DsnParser;
+use JsonException;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
@@ -132,16 +133,46 @@ final class DatabaseExceptionTest extends TestCase
         }
     }
 
+    #[Test]
+    public function append_wraps_json_exceptions_of_the_metadata(): void
+    {
+        self::assertWrapsException(JsonException::class, fn() => $this->eventStore->append(Event::create('SomeEvent', 'a', [], ['invalidUtf8' => "\xB1"])));
+    }
+
+    #[Test]
+    public function iterating_over_read_events_wraps_json_exceptions_of_the_tags(): void
+    {
+        $this->eventStore->append(Event::create('SomeEvent', 'a', [], []));
+        $corruptingConnection = $this->connect(new CorruptTagsMiddleware());
+        $eventStore = DoctrineEventStore::create($corruptingConnection, self::TABLE);
+
+        try {
+            $events = $eventStore->read(Query::all());
+            self::assertWrapsException(JsonException::class, static fn() => iterator_to_array($events));
+        } finally {
+            $corruptingConnection->close();
+        }
+    }
+
     /**
      * @param Closure(): mixed $callback
      */
     private static function assertWrapsDatabaseException(Closure $callback): void
     {
+        self::assertWrapsException(DbalException::class, $callback);
+    }
+
+    /**
+     * @param class-string<\Throwable> $expectedPrevious
+     * @param Closure(): mixed $callback
+     */
+    private static function assertWrapsException(string $expectedPrevious, Closure $callback): void
+    {
         try {
             $callback();
         } catch (\Throwable $e) {
             self::assertSame(RuntimeException::class, $e::class, 'Unexpected exception: ' . $e->getMessage());
-            self::assertInstanceOf(DbalException::class, $e->getPrevious());
+            self::assertInstanceOf($expectedPrevious, $e->getPrevious());
             return;
         }
         self::fail('Expected an exception');
@@ -206,6 +237,33 @@ final class FailingRollbackMiddleware implements Middleware
                             throw new class ('Failed to roll back') extends AbstractException {};
                         }
                         return (int) parent::exec($sql);
+                    }
+                };
+            }
+        };
+    }
+}
+
+/**
+ * Returns rows with invalid tags, which the JSON columns of PostgreSQL and MySQL would not accept
+ */
+final class CorruptTagsMiddleware implements Middleware
+{
+    public function wrap(DriverInterface $driver): DriverInterface
+    {
+        return new class ($driver) extends AbstractDriverMiddleware {
+            public function connect(array $params): DriverConnection
+            {
+                return new class (parent::connect($params)) extends AbstractConnectionMiddleware {
+                    public function query(string $sql): Result
+                    {
+                        return new class (parent::query($sql)) extends AbstractResultMiddleware {
+                            public function fetchAssociative(): array|false
+                            {
+                                $row = parent::fetchAssociative();
+                                return $row === false ? false : ['tags' => 'not json'] + $row;
+                            }
+                        };
                     }
                 };
             }
