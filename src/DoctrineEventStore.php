@@ -36,8 +36,10 @@ use Wwwision\DCBEventStore\SequencedEvent\SequencedEvents;
 
 use Wwwision\DCBEventStore\SequencedEvent\SequencePosition;
 
+use function count;
 use function hash;
 use function implode;
+use function iterator_to_array;
 use function json_encode;
 use function sprintf;
 use function strlen;
@@ -165,7 +167,11 @@ final class DoctrineEventStore implements EventStore
     public function read(Query $query, ReadOptions|null $options = null): SequencedEvents
     {
         $queryBuilder = $this->createReadQueryBuilder($options);
-        $this->addDcbQueryConstraints($queryBuilder, $query);
+        if (self::isSingleEventTypeQuery($query)) {
+            $this->addDcbQueryWhereConstraints($queryBuilder, $query);
+        } else {
+            $this->addDcbQueryConstraints($queryBuilder, $query);
+        }
         return self::fetchSequencedEvents($queryBuilder);
     }
 
@@ -220,6 +226,21 @@ final class DoctrineEventStore implements EventStore
         }
         // This is not an EXISTS on purpose: MySQL 8 turns that into a semi-join that evaluates JSON_TABLE before the table it depends on and returns no rows
         return "(SELECT 1 FROM JSON_TABLE(events.tags, '$[*]' COLUMNS (tag VARCHAR(" . Tag::LENGTH_MAX . ") PATH '$')) partition_tags WHERE CAST(LEFT(partition_tags.tag, :partitionPrefixLength) AS BINARY) = CAST(:partitionPrefix AS BINARY) AND CAST(CONV(SUBSTR(SHA2(partition_tags.tag, 256), 1, 8), 16, 10) AS UNSIGNED) % :partitions = :partition LIMIT 1) IS NOT NULL";
+    }
+
+    /**
+     * A query for one event type can walk the index on (type, sequence_number) in the requested order, so it doesn't need a derived table.
+     * This doesn't apply to other queries: A database would walk the primary key instead if the filter is expected to match soon,
+     * and scan the whole table if the matching events are clustered somewhere else in the log. See docs/decisions.md
+     */
+    private static function isSingleEventTypeQuery(Query $query): bool
+    {
+        $items = iterator_to_array($query, false);
+        if (count($items) !== 1) {
+            return false;
+        }
+        $item = $items[0];
+        return $item->tags === null && !$item->onlyLastEvent && $item->eventTypes !== null && count($item->eventTypes->toStringArray()) === 1;
     }
 
     private function createReadQueryBuilder(ReadOptions|null $options): QueryBuilder
@@ -411,7 +432,7 @@ final class DoctrineEventStore implements EventStore
 
     /**
      * Alternative to {@see self::addDcbQueryConstraints()} for queries without "onlyLastEvent" that doesn't need a derived table.
-     * MySQL and MariaDB materialize that table with all matching events regardless of the requested position and limit.
+     * That table is materialized with all matching events regardless of the requested position and limit.
      */
     private function addDcbQueryWhereConstraints(QueryBuilder $queryBuilder, Query $dcbQuery): void
     {

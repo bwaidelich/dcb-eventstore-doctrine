@@ -102,7 +102,8 @@ $events = $eventStore->readPartition($partition, Query::all(), ReadOptions::crea
 - Partitions can overlap, which is unsuitable for side effects like sending one email per event.
 - Catching up costs a primary key scan per worker, as the GIN index on tags can't serve a prefix or hash.
 - Changing `n` to anything but double or half requires a rebuild, because most tags move.
-- There are two ways to apply a `Query`. `read()` and append conditions still use the derived table, and have the same cost on MySQL and MariaDB.
+- There are two ways to apply a `Query`. See [the decision about `read()`](#apply-a-query-for-one-event-type-without-a-derived-table) for the cases that use the derived table.
+- A multi-type `Query` with a small `limit` can scan the table if its events are clustered at the other end of the log (2ms vs. 1s on MariaDB 11.4 with 1 million events and `limit: 10`). Batches of 1000 weren't affected in these measurements.
 
 Measurements with PHP 8.5 through `readPartition()` and local Docker, best of 3 runs, one client, `partitions: 8`. 41% of the events have a `cart:` tag, 1% have two. These are not production numbers.
 
@@ -137,3 +138,36 @@ Measurements with PHP 8.5 through `readPartition()` and local Docker, best of 3 
 **Tag prefix in the DCB `Query` (`cart:*`):** doesn't select a partition by itself. As `Query` is also used for append conditions, it would allow full scans while holding the append lock. It also requires changes to the core package and all of its adapters. It might still be useful as a separate proposal.
 
 **Expression GIN index over virtual buckets:** in a test with 5 million events it wasn't used by PostgreSQL for a batch at `n = 8`, and it ties the schema to specific prefixes.
+
+## Apply a query for one event type without a derived table
+
+Status: accepted
+
+### Context
+
+`read()` joins a derived table that contains all events matching the query, regardless of the requested position and limit. A query for a common event type pays for all events of that type, even for `limit: 1`.
+
+### Decision
+
+`read()` applies a `Query` in the `WHERE` clause if it consists of one item with exactly one event type, no tags and without `onlyLastEvent`. The database can walk the index on `(type, sequence_number)` in the requested order. All other queries and append conditions keep the derived table.
+
+Measurements with raw SQL in local Docker, best of 2 runs, for a query with one common event type:
+
+| | PostgreSQL 17, 5M events | MySQL 8.4, 1M | MariaDB 11.4, 1M |
+|---|---|---|---|
+| `limit: 1000` from the start | 2ms -> 2ms | 871ms -> 3ms | 130ms -> 4ms |
+| `limit: 1000` from 90% of the log | 188ms -> 2ms | 398ms -> 2ms | 13ms -> 3ms |
+| Backwards, `limit: 1` | 329ms -> 1ms | 789ms -> 1ms | 119ms -> 1ms |
+
+### Rejected alternatives
+
+**`WHERE` clause for all queries without `onlyLastEvent`:** much faster with evenly distributed events, but without an index that provides the order, databases walk the primary key if they expect a match soon. If there is no match, or the matching events are clustered at the other end of the log, this scans the table:
+
+| Query | Engine, events | Derived table | `WHERE` |
+|---|---|---|---|
+| Tag without matches, backwards, `limit: 1` | PostgreSQL 17, 5M | 0.5ms | 1143ms |
+| Two types only used recently, `limit: 1` | PostgreSQL 17, 5M | 1ms | 1011ms |
+| Two types only used early, backwards, `limit: 1` | MySQL 8.4, 1M | 7ms | 451ms |
+| Two types only used early, backwards, `limit: 1` | MariaDB 11.4, 1M | 2ms | 969ms |
+
+Queries like this are typical, for example to check for the last event with a tag, and the cost grows with the log.
