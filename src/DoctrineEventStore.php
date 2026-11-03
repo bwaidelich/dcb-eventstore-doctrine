@@ -17,6 +17,7 @@ use Doctrine\DBAL\Schema\Schema;
 use Doctrine\DBAL\Schema\Table;
 use Doctrine\DBAL\Types\Type;
 use Doctrine\DBAL\Types\Types;
+use InvalidArgumentException;
 use JsonException;
 use RuntimeException;
 use Webmozart\Assert\Assert;
@@ -24,6 +25,7 @@ use Wwwision\DCBEventStore\AppendCondition\AppendCondition;
 use Wwwision\DCBEventStore\Event\Event;
 use Wwwision\DCBEventStore\Event\Events;
 use Wwwision\DCBEventStore\Event\EventType;
+use Wwwision\DCBEventStore\Event\Tag;
 use Wwwision\DCBEventStore\EventStore;
 use Wwwision\DCBEventStore\Exceptions\ConditionalAppendFailed;
 use Wwwision\DCBEventStore\Query\Query;
@@ -38,6 +40,7 @@ use function hash;
 use function implode;
 use function json_encode;
 use function sprintf;
+use function strlen;
 use function strrpos;
 use function substr;
 
@@ -161,6 +164,63 @@ final class DoctrineEventStore implements EventStore
 
     public function read(Query $query, ReadOptions|null $options = null): SequencedEvents
     {
+        return self::fetchSequencedEvents($this->createReadQueryBuilder($query, $options));
+    }
+
+    /**
+     * Returns the events matching the specified {@see Query} that have a tag belonging to the specified {@see TagPartition}
+     *
+     * An event with multiple matching tags is returned by every partition that owns one of them, an event without a matching tag by none.
+     *
+     * To avoid rescanning positions without matching events, specify {@see self::head()} as $until. A worker can then continue after
+     * the last event if the batch reached the limit, or after $until otherwise. See README.
+     *
+     * @param SequencePosition|null $until If specified, only events up to and including this position will be returned. Can't be combined with reading backwards
+     * @throws RuntimeException if the database platform doesn't support partitioned reads (SQLite)
+     * @throws InvalidArgumentException if the $query contains items with "onlyLastEvent" or if $until is combined with reading backwards
+     */
+    public function readPartition(TagPartition $partition, Query $query, ReadOptions|null $options = null, SequencePosition|null $until = null): SequencedEvents
+    {
+        if ($this->config->isSQLite()) {
+            throw new RuntimeException('Partitioned reads are not supported on SQLite, because it has no built-in hash function', 1793664001);
+        }
+        foreach ($query as $queryItem) {
+            if ($queryItem->onlyLastEvent) {
+                throw new InvalidArgumentException('Partitioned reads do not support query items with "onlyLastEvent", because the last event is determined before the partition is applied', 1793664002);
+            }
+        }
+        if ($until !== null && $options !== null && $options->backwards) {
+            throw new InvalidArgumentException('Partitioned reads do not support "until" when reading backwards', 1793664003);
+        }
+        $queryBuilder = $this->createReadQueryBuilder($query, $options);
+        if ($until !== null) {
+            $queryBuilder->andWhere('events.sequence_number <= :until')->setParameter('until', $until->value, ParameterType::INTEGER);
+        }
+        $queryBuilder
+            ->andWhere($this->partitionConstraint())
+            ->setParameter('partitionPrefix', $partition->prefix)
+            ->setParameter('partitions', $partition->partitions, ParameterType::INTEGER)
+            ->setParameter('partition', $partition->partition, ParameterType::INTEGER);
+        if (!$this->config->isPostgreSQL()) {
+            $queryBuilder->setParameter('partitionPrefixLength', strlen($partition->prefix), ParameterType::INTEGER);
+        }
+        return self::fetchSequencedEvents($queryBuilder);
+    }
+
+    /**
+     * Has to implement the same calculation as {@see TagPartition::contains()}
+     */
+    private function partitionConstraint(): string
+    {
+        if ($this->config->isPostgreSQL()) {
+            return "EXISTS (SELECT 1 FROM jsonb_array_elements_text(events.tags) partition_tags(tag) WHERE starts_with(partition_tags.tag, :partitionPrefix::text) AND ('x' || substr(encode(sha256(convert_to(partition_tags.tag, 'UTF8')), 'hex'), 1, 8))::bit(32)::bigint % :partitions::bigint = :partition::bigint)";
+        }
+        // This is not an EXISTS on purpose: MySQL 8 turns that into a semi-join that evaluates JSON_TABLE before the table it depends on and returns no rows
+        return "(SELECT 1 FROM JSON_TABLE(events.tags, '$[*]' COLUMNS (tag VARCHAR(" . Tag::LENGTH_MAX . ") PATH '$')) partition_tags WHERE CAST(LEFT(partition_tags.tag, :partitionPrefixLength) AS BINARY) = CAST(:partitionPrefix AS BINARY) AND CAST(CONV(SUBSTR(SHA2(partition_tags.tag, 256), 1, 8), 16, 10) AS UNSIGNED) % :partitions = :partition LIMIT 1) IS NOT NULL";
+    }
+
+    private function createReadQueryBuilder(Query $query, ReadOptions|null $options): QueryBuilder
+    {
         $backwards = $options->backwards ?? false;
         $queryBuilder = $this->config->connection->createQueryBuilder()
             ->select('events.*')
@@ -174,12 +234,36 @@ final class DoctrineEventStore implements EventStore
         if ($options !== null && $options->limit !== null) {
             $queryBuilder->setMaxResults($options->limit);
         }
+        return $queryBuilder;
+    }
+
+    private static function fetchSequencedEvents(QueryBuilder $queryBuilder): SequencedEvents
+    {
         $result = $queryBuilder->executeQuery();
         return SequencedEvents::create(static function () use ($result) {
             while (($row = $result->fetchAssociative()) !== false) {
                 yield self::databaseRowToSequencedEvent($row);
             }
         });
+    }
+
+    /**
+     * Returns the position of the last committed event, or NULL if the event store is empty
+     *
+     * NOTE: This must not read the counter of the sequence or AUTO_INCREMENT column: It is ahead of the committed
+     * events while an append is in flight, so a worker would checkpoint past events it hasn't seen yet
+     */
+    public function head(): SequencePosition|null
+    {
+        $head = $this->config->connection->createQueryBuilder()
+            ->select('MAX(sequence_number)')
+            ->from($this->config->eventTableName)
+            ->fetchOne();
+        if ($head === null) {
+            return null;
+        }
+        Assert::numeric($head);
+        return SequencePosition::fromInteger((int) $head);
     }
 
     public function append(Events|Event $events, AppendCondition|null $condition = null): void

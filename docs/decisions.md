@@ -60,3 +60,78 @@ Measurements with PostgreSQL 17 in local Docker, 16 PHP processes, 8 seconds per
 **`LOCK TABLE ... IN SHARE ROW EXCLUSIVE MODE`:** also blocks other writers, but conflicts with `VACUUM` and `ANALYZE`.
 
 **`synchronous_commit = off` to shorten the lock duration:** a crash could lose acknowledged events.
+
+## Read events by tag partition
+
+Status: accepted
+
+### Context
+
+To share one projection between N workers, each worker should only read the events of the entities it owns. Filtering in PHP means every worker reads and deserializes the full log. A partition has to be selected in SQL, but the concept is outside of the DCB specification, so it can't be part of the `Query` of `wwwision/dcb-eventstore`.
+
+### Decision
+
+`DoctrineEventStore::readPartition()` returns the events with a tag that starts with a given prefix and hashes into partition `p` of `n`. `DoctrineEventStore::head()` returns the position to read up to:
+
+```php
+$partition = TagPartition::create(prefix: 'cart:', partitions: 8, partition: 3);
+$events = $eventStore->readPartition($partition, Query::all(), ReadOptions::create(from: 1001, limit: 1000), until: $eventStore->head());
+```
+
+| Topic | Decision |
+|---|---|
+| Source | Tags. They already identify the entities on all existing events and require no change to writers. Removing a tag from new events is a breaking change for partitioned readers |
+| Hash | First 32 bits of the SHA-256 of the whole tag as an unsigned integer, modulo `n`. This can't change without rebuilding all partitioned projections. Unsigned is required, a signed value leads to negative remainders |
+| Several matching tags | The event is returned by every partition that owns one of them, so partitions can overlap. Otherwise the owner of the other tag would silently miss it. A worker uses `TagPartition::contains()` to determine the tags it owns |
+| No matching tag | The event isn't returned by any partition |
+| Prefix | Literal and case-sensitive. `LIKE` is not an option because `_` is valid in tags, and `my_cart:%` would match `myXcart:1`. A trailing colon isn't enforced, so `cart` matches `cartoon:1` |
+| Query | ANDed with the partition, through the same constraints as `read()`. `onlyLastEvent` is rejected, because the maximum is determined before the partition filter applies and the result would look valid but be mostly empty |
+| `until` | Inclusive and forward-only. Without it, a worker only learns the positions of hits, so a worker with a rare prefix rescans everything since its last hit on every poll, regardless of `limit` |
+| Checkpoint | The last event's position if a batch reached `limit`, otherwise `until`. This is safe because a lower position can't become visible after a higher one (see above) |
+| `head()` | `MAX(sequence_number)`, available on all platforms. It must never read the sequence or `AUTO_INCREMENT` counter: those are ahead of the committed events while an append is in flight, so a worker would checkpoint past events it hasn't seen |
+| PHP hash | Public as `TagPartition::contains()`, because workers need it. Tests freeze the contract with hard-coded values and compare SQL and PHP on every platform |
+| SQL | Inline, without a function created by `setup()`. An `IMMUTABLE` function would only be required for an expression index. No schema change or migration |
+| MySQL/MariaDB SQL | A scalar `(SELECT 1 FROM JSON_TABLE(...) ... LIMIT 1) IS NOT NULL` instead of `EXISTS`. MySQL 8.0 and 8.4 turn `EXISTS` into a semi-join that evaluates `JSON_TABLE` before the table it depends on, and silently return no rows for tables with more than one row. MariaDB is not affected |
+| Index | None. Reads walk the primary key. An index would tie the schema to specific prefixes |
+| Platforms | PostgreSQL and MySQL/MariaDB. SQLite has no built-in hash function and multiple workers on one database file are unrealistic, so `readPartition()` throws there |
+| Rescaling | Documented, not enforced, because checkpoints belong to the caller. Doubling `n` splits partition `k` into `k` and `k + n`. Any `n` can be doubled, it doesn't have to be a power of two |
+| Subscription engine | Out of scope. `wwwision/subscription-engine` only advances to the last handled event and its adapter interface has no upper bound, so `until` can't be used through it. An adapter based on `readPartition()` would work, with the rescans described above. Avoiding them requires a change to the engine |
+
+### Consequences
+
+- Partitions can overlap, which is unsuitable for side effects like sending one email per event.
+- Catching up costs a primary key scan per worker, as the GIN index on tags can't serve a prefix or hash.
+- Changing `n` to anything but double or half requires a rebuild, because most tags move.
+- On MySQL, a batch with a type `Query` is much slower than one without (see below), because of the join that is shared with `read()`. Pushing the types into the `WHERE` clause could improve this, but would add a second code path for queries.
+
+Measurements with PHP 8.5 through `readPartition()` and local Docker, best of 3 runs, one client, `partitions: 8`. 41% of the events have a `cart:` tag, 1% have two. These are not production numbers.
+
+| | PostgreSQL 17, 5M events | PostgreSQL 17, 1M | MySQL 8.4, 1M | MariaDB 11.4, 1M |
+|---|---|---|---|---|
+| `read()` of all events, for comparison | 25.5s | 5.0s | 4.7s | 4.7s |
+| Whole partition | 7.3s | 1.5s | 1.5s | 1.5s |
+| Batch of 1000 from the start | 29ms | 29ms | 28ms | 26ms |
+| Batch of 1000 with a type `Query` | 30ms | 28ms | 1096ms | 138ms |
+| Last 50,000 positions with `until` | 76ms | 76ms | 69ms | 68ms |
+| Prefix without matches, `limit: 1000` | 3.8s | 0.7s | 0.9s | 1.2s |
+| `head()` | 0.5ms | 0.5ms | 0.3ms | 0.4ms |
+
+### Rejected alternatives
+
+**Single partition key in the event metadata, one partition per event:** simpler SQL and disjoint partitions, but one key can't serve a by-course and a by-student projection of the same event, events concerning two entities reach only one of their workers, existing events have no key, and nothing enforces that writers set it.
+
+**`hashtext()`:** the fastest option, but undocumented without a stability guarantee, hard to reproduce in PHP, and signed.
+
+**MD5:** about the same cost as SHA-256, but `md5()` is expected to fail on PostgreSQL built with OpenSSL in FIPS mode. The hash can't be changed later, so it should not depend on that.
+
+**Canonical tag per event (for example the smallest match):** partitions would be disjoint, but the owner of any other tag would silently miss the event.
+
+**Extending `ReadOptions`:** `final` with a private constructor in the core package.
+
+**Decorator around `EventStore`:** requires private query building of the store, and `EventStore::read()` has no parameter for `until`.
+
+**Separate `PartitionedReader`:** would require moving query building and row mapping into a shared class for a single additional caller.
+
+**Tag prefix in the DCB `Query` (`cart:*`):** doesn't select a partition by itself. As `Query` is also used for append conditions, it would allow full scans while holding the append lock. It also requires changes to the core package and all of its adapters. It might still be useful as a separate proposal.
+
+**Expression GIN index over virtual buckets:** in a test with 5 million events it wasn't used by PostgreSQL for a batch at `n = 8`, and it ties the schema to specific prefixes.

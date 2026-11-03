@@ -54,6 +54,58 @@ INSERT INTO <table> ...;
 SELECT RELEASE_LOCK('dcb_<table>');
 ```
 
+### Partitioned reads
+
+Multiple workers can share one projection, without each of them reading the full event log. `readPartition()` only returns events with a tag that starts with a given prefix and hashes into one of `n` partitions. This is an extension of this package and not part of the DCB specification. It is supported on PostgreSQL and MySQL/MariaDB, and throws an exception on SQLite.
+
+```php
+use Wwwision\DCBEventStore\Query\Query;
+use Wwwision\DCBEventStore\ReadOptions;
+use Wwwision\DCBEventStoreDoctrine\TagPartition;
+
+// worker 3 of 8 for all tags starting with "cart:"
+$partition = TagPartition::create(prefix: 'cart:', partitions: 8, partition: 3);
+$batchSize = 1000;
+
+$head = $eventStore->head();
+if ($head === null) {
+    return; // the event store is empty
+}
+$numberOfEvents = 0;
+foreach ($eventStore->readPartition($partition, Query::all(), ReadOptions::create(from: $checkpoint->next(), limit: $batchSize), until: $head) as $sequencedEvent) {
+    foreach ($sequencedEvent->event->tags as $tag) {
+        if ($partition->contains($tag)) {
+            // handle the event for the entity identified by $tag
+        }
+    }
+    $checkpoint = $sequencedEvent->position;
+    $numberOfEvents++;
+}
+if ($numberOfEvents < $batchSize) {
+    // all positions up to $head were checked. Without this, a worker would rescan positions without matching events on every poll
+    $checkpoint = $head;
+}
+// persist $checkpoint
+```
+
+- **Several matching tags:** an event is returned by every partition that owns one of its tags, so partitions can overlap. Use `TagPartition::contains()` as above to only handle the tags of the current partition. Because of that overlap, partitions are not suited for side effects that must happen once per event.
+- **No matching tag:** the event isn't returned by any partition.
+- **Prefix:** literal and case-sensitive. A trailing colon is not enforced, so `cart` also matches `cartoon:1`.
+- **Query:** only events matching both the partition and the query are returned. Query items with `onlyLastEvent` are rejected.
+- **`until`:** inclusive, and can't be combined with reading backwards. Use the global `head()`, not the position of the last event of a partition.
+- **Tags:** removing a tag from new events is a breaking change for partitioned readers, because they stop receiving those events.
+- **Performance:** there is no index for partitions, so reads walk the primary key from `from` up to `until` or until `limit` is reached. See [docs/decisions.md](docs/decisions.md).
+
+The partition of a tag is fixed: the first 32 bits of the SHA-256 of the whole tag as unsigned integer, modulo the number of partitions.
+
+#### Changing the number of partitions
+
+Checkpoints belong to the caller, so this package can't enforce the following. A previous and a new worker must never process the same tags at the same time, so stop the affected workers first.
+
+- **Doubling `n`:** partition `k` splits into `k` and `k + n`. Both start from the checkpoint of the former `k`. This works for any `n`, not only for powers of two. State that is kept per worker has to move along with its tags.
+- **Halving `n`:** partitions `k` and `k + n` merge into `k`, which continues from the lower of both checkpoints. It sees some events again, so handlers must be idempotent.
+- **Any other change:** rebuild the projection, because most tags move to a different partition.
+
 ### Upgrading PostgreSQL installations
 
 Previous versions did not serialize appends on PostgreSQL:
