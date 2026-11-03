@@ -18,8 +18,11 @@ use Wwwision\DCBEventStoreDoctrine\DoctrineEventStore;
 
 require __DIR__ . '/../../vendor/autoload.php';
 
-Assert::count($argv, 5);
-[, $dsn, $table, $data, $tag] = $argv;
+$arguments = $_SERVER['argv'] ?? null;
+Assert::isList($arguments);
+Assert::allString($arguments);
+Assert::count($arguments, 5);
+[, $dsn, $table, $data, $tag] = $arguments;
 
 $config = new Configuration();
 $config->setSchemaManagerFactory(new DefaultSchemaManagerFactory());
