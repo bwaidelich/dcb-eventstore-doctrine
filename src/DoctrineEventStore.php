@@ -216,8 +216,15 @@ final class DoctrineEventStore implements EventStore
             $mysqlAdvisoryLockName = null;
             try {
                 if ($this->config->isPostgreSQL()) {
-                    $this->config->connection->executeStatement('BEGIN ISOLATION LEVEL SERIALIZABLE');
+                    // Sequence numbers are allocated at insert time but only become visible on commit. The lock is held
+                    // until after the commit, so that a reader can never see a position before all lower ones.
+                    // It has to be acquired in READ COMMITTED: In SERIALIZABLE the statement would take the snapshot
+                    // before waiting for the lock, and the append condition would miss events committed in the meantime.
+                    // See docs/decisions.md
+                    $this->config->connection->executeStatement('BEGIN ISOLATION LEVEL READ COMMITTED');
                     $transactionStarted = true;
+                    $this->config->connection->executeStatement("SET LOCAL lock_timeout = '30s'");
+                    $this->config->connection->fetchOne('SELECT pg_advisory_xact_lock(hashtextextended(?, 0))', ['dcb_' . $this->config->eventTableName]);
                 } elseif ($this->config->isMySQL()) {
                     // MySQL's SERIALIZABLE isolation does not acquire gap locks for complex INSERT...WHERE NOT EXISTS
                     // queries with derived subqueries, allowing phantom reads. We use an advisory lock instead to
@@ -231,6 +238,7 @@ final class DoctrineEventStore implements EventStore
                 $affectedRows = (int) $this->config->connection->executeStatement($statement, $parameters, $parameterTypes);
                 if ($transactionStarted) {
                     $this->config->connection->executeStatement('COMMIT');
+                    $transactionStarted = false;
                 }
                 return $affectedRows;
             } catch (DeadlockException $e) {
