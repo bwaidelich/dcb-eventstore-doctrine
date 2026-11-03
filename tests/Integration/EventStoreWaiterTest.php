@@ -24,7 +24,6 @@ use Wwwision\DCBEventStore\Query\Query;
 use Wwwision\DCBEventStore\Query\QueryItem;
 use Wwwision\DCBEventStoreDoctrine\DoctrineEventStore;
 use Wwwision\DCBEventStoreDoctrine\DoctrineEventStoreConfiguration;
-use Wwwision\DCBEventStoreDoctrine\EventStoreWaiter;
 use Wwwision\DCBEventStoreDoctrine\PollingWaiter;
 use Wwwision\DCBEventStoreDoctrine\PostgresNotificationWaiter;
 
@@ -79,7 +78,6 @@ final class EventStoreWaiterTest extends TestCase
     {
         $waiter = $this->eventStore->createWaiter($this->waiterConnection);
 
-        self::assertInstanceOf(EventStoreWaiter::class, $waiter);
         $start = microtime(true);
         self::assertTrue($waiter->waitForNewEvents(5.0));
         self::assertLessThan(2.0, microtime(true) - $start);
@@ -139,7 +137,7 @@ final class EventStoreWaiterTest extends TestCase
         $waiter = $this->notifyingEventStore()->createWaiter($this->waiterConnection, 0.05);
         $waiter->waitForNewEvents(0.0);
 
-        $process = $this->appendInSeparateProcess(self::TABLE, delaySeconds: 0.3);
+        $process = $this->appendInSeparateProcess();
         $start = microtime(true);
         $result = $waiter->waitForNewEvents(10.0);
         $elapsed = microtime(true) - $start;
@@ -257,7 +255,7 @@ final class EventStoreWaiterTest extends TestCase
         self::assertInstanceOf(PostgresNotificationWaiter::class, $waiter);
         $waiter->waitForNewEvents(0.0);
 
-        $process = $this->appendInSeparateProcess(self::TABLE, delaySeconds: 0.3);
+        $process = $this->appendInSeparateProcess();
         $start = microtime(true);
         $result = $waiter->waitForNewEvents(10.0);
         $elapsed = microtime(true) - $start;
@@ -360,7 +358,7 @@ final class EventStoreWaiterTest extends TestCase
         if (!extension_loaded('pgsql')) {
             self::markTestSkipped('Requires the pgsql extension');
         }
-        $connection = DriverManager::getConnection(['driver' => 'pgsql'] + $this->connection->getParams());
+        $connection = DriverManager::getConnection(['driver' => 'pgsql'] + (new DsnParser())->parse($this->dsn));
         $waiter = $this->notifyingEventStore()->createWaiter($connection);
 
         try {
@@ -399,9 +397,9 @@ final class EventStoreWaiterTest extends TestCase
     /**
      * @return resource
      */
-    private function appendInSeparateProcess(string $table, float $delaySeconds)
+    private function appendInSeparateProcess()
     {
-        $process = proc_open([PHP_BINARY, __DIR__ . '/append-event.php', $this->dsn, $table, 'data', 'some:tag', 'notify', (string) $delaySeconds], [], $pipes);
+        $process = proc_open([PHP_BINARY, __DIR__ . '/append-event.php', $this->dsn, self::TABLE, 'data', 'some:tag', 'notify', '0.3'], [], $pipes);
         self::assertIsResource($process);
         return $process;
     }

@@ -40,7 +40,10 @@ final class PostgresNotificationWaiter implements EventStoreWaiter
         }
         try {
             if ($this->receiveNotification((int) ceil($timeoutSeconds * 1000))) {
-                while ($this->receiveNotification(0));
+                // All queued notifications result in a single wake-up
+                do {
+                    $received = $this->receiveNotification(0);
+                } while ($received);
                 $this->headHasChanged();
                 return true;
             }

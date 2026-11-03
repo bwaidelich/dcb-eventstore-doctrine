@@ -275,6 +275,8 @@ final class DoctrineEventStore implements EventStore
      *
      * NOTE: This must not read the counter of the sequence or AUTO_INCREMENT column: It is ahead of the committed
      * events while an append is in flight, so a worker would checkpoint past events it hasn't seen yet
+     *
+     * @throws DbalException
      */
     public function head(): SequencePosition|null
     {
@@ -298,7 +300,7 @@ final class DoctrineEventStore implements EventStore
     public function createWaiter(Connection $dedicatedConnection, float $pollIntervalSeconds = 1.0): EventStoreWaiter
     {
         $config = DoctrineEventStoreConfiguration::create($dedicatedConnection, $this->config->eventTableName);
-        if ($this->config->isPostgreSQL() && $this->config->notificationsEnabled) {
+        if ($this->config->notificationsEnabled && $this->config->isPostgreSQL()) {
             return new PostgresNotificationWaiter($config);
         }
         return new PollingWaiter($config, $pollIntervalSeconds);
@@ -403,7 +405,7 @@ final class DoctrineEventStore implements EventStore
             } catch (DbalException $e) {
                 // MariaDB error 1467 ("Failed to read auto-increment value from storage engine") is a transient
                 // concurrency failure under SERIALIZABLE isolation — treat it like a deadlock and retry
-                if ((int) $e->getCode() === 1467 && $retryAttempt < $maxRetryAttempts) {
+                if ($retryAttempt < $maxRetryAttempts && (int) $e->getCode() === 1467) {
                     usleep((int) ($retryWaitInterval * 1E6));
                     $retryAttempt++;
                     $retryWaitInterval *= 2;
