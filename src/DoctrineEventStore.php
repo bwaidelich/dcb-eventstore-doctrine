@@ -33,6 +33,7 @@ use Wwwision\DCBEventStore\SequencedEvent\SequencedEvents;
 
 use Wwwision\DCBEventStore\SequencedEvent\SequencePosition;
 
+use function hash;
 use function implode;
 use function json_encode;
 use function sprintf;
@@ -58,7 +59,7 @@ final class DoctrineEventStore implements EventStore
                 $this->config->connection->executeStatement($statement);
             }
             if ($this->config->isPostgreSQL()) {
-                $this->config->connection->executeStatement('CREATE INDEX IF NOT EXISTS tags ON ' . $this->config->eventTableName . ' USING gin (tags jsonb_path_ops)');
+                $this->config->connection->executeStatement('CREATE INDEX IF NOT EXISTS ' . $this->indexName('tags') . ' ON ' . $this->config->eventTableName . ' USING gin (tags jsonb_path_ops)');
             }
         } catch (DbalException $e) {
             throw new RuntimeException(sprintf('Failed to setup event store: %s', $e->getMessage()), 1687010035, $e);
@@ -114,11 +115,20 @@ final class DoctrineEventStore implements EventStore
             ->setPlatformOptions($this->config->isPostgreSQL() ? ['jsonb' => true] : []);
 
         $eventsTable->addColumn('recorded_at', Types::DATETIME_IMMUTABLE);
-        $eventsTable->addIndex(['type'], 'idx_type');
-        $eventsTable->addIndex(['type', 'sequence_number'], 'idx_type_sequence_number');
+        $eventsTable->addIndex(['type'], $this->indexName('type'));
+        $eventsTable->addIndex(['type', 'sequence_number'], $this->indexName('type_sequence_number'));
         $eventsTable->setPrimaryKey(['sequence_number']);
 
         return $schema;
+    }
+
+    /**
+     * Index names are unique per schema on PostgreSQL and SQLite, so they have to differ between event tables.
+     * The table name is hashed to stay within identifier length limits and to support schema-qualified table names.
+     */
+    private function indexName(string $suffix): string
+    {
+        return 'idx_' . hash('crc32b', $this->config->eventTableName) . '_' . $suffix;
     }
 
     public function read(Query $query, ReadOptions|null $options = null): SequencedEvents
