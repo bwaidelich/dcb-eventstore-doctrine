@@ -54,6 +54,7 @@ final class AppendOrderingTest extends TestCase
     protected function setUp(): void
     {
         $dsn = getenv('DCB_TEST_DSN');
+        // doctrine/dbal 3.6.0 fails to parse the equivalent "pdo-sqlite:///events_test.sqlite"
         $this->dsn = is_string($dsn) ? $dsn : 'pdo-sqlite://localhost/events_test.sqlite';
         $this->connectionA = $this->connect();
         $this->readerConnection = $this->connect();

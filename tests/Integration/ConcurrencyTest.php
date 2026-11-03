@@ -66,6 +66,7 @@ final class ConcurrencyTest extends EventStoreConcurrencyTestBase
         if (self::$connection === null) {
             $dsn = getenv('DCB_TEST_DSN');
             if (!is_string($dsn)) {
+                // doctrine/dbal 3.6.0 fails to parse the equivalent "pdo-sqlite:///events_test.sqlite"
                 $dsn = 'pdo-sqlite://localhost/events_test.sqlite';
             }
             $config = new Configuration();
