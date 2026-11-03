@@ -94,7 +94,7 @@ jobs:
           extensions: ${{ matrix.database.extension }}
 
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Cache Composer packages
         id: composer-cache
@@ -144,7 +144,7 @@ jobs:
           extensions: pdo_mysql, pdo_pgsql, pdo_sqlite
 
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Cache Composer packages
         id: composer-cache
