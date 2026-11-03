@@ -106,6 +106,32 @@ Checkpoints belong to the caller, so this package can't enforce the following. A
 - **Halving `n`:** partitions `k` and `k + n` merge into `k`, which continues from the lower of both checkpoints. It sees some events again, so handlers must be idempotent.
 - **Any other change:** rebuild the projection, because most tags move to a different partition.
 
+### Waiting for new events
+
+An idle worker can block until there might be new events instead of polling on its own:
+
+```php
+$config = DoctrineEventStoreConfiguration::create($connection, 'events')->withNotifications();
+$eventStore = new DoctrineEventStore($config);
+
+$waiter = $eventStore->createWaiter($dedicatedConnection);
+while (true) {
+    // read and handle new events after the last checkpoint...
+    $waiter->waitForNewEvents(30.0);
+}
+```
+
+Read at least after every `true`. It can be spurious, and the first call returns it immediately, so that nothing gets lost between catching up and starting to wait. `false` means that the head didn't change since the last check, which can also happen before the timeout if a signal ended the wait.
+
+On PostgreSQL, `withNotifications()` makes appends send a notification on commit, and the waiter wakes up right away. Otherwise, the waiter calls `head()` once per interval (default: 1 second, see the second argument of `createWaiter()`). This also applies to MySQL/MariaDB and SQLite, where `withNotifications()` has no effect.
+
+- **Writers and workers:** enable `withNotifications()` for both. If only the worker has it, it notices events when its timeout expires. If only the writers have it, the worker polls.
+- **Cost:** notifications slow down appends, even across event tables, because PostgreSQL serializes notifying commits. See [docs/decisions.md](docs/decisions.md) for measurements.
+- **Dedicated connection:** on PostgreSQL it can't be used for anything else while a worker is running, must use the `pdo_pgsql` driver and has to connect to the primary. `LISTEN` doesn't work through PgBouncer in transaction mode, so it needs to bypass that.
+- **Other writers:** writers outside of this package don't notify. Their events are noticed when the timeout expires.
+- **Lost connections:** a waiter reconnects on its own and returns `true`. If that fails, it throws a `RuntimeException` and tries again on the next call, so a worker should catch it and back off. A silently dropped TCP connection can block until the operating system gives up. A timeout of 30 seconds or less keeps the connection from looking idle to firewalls.
+- **Load:** under constant appends workers read constantly, which can cause more load than polling. A worker can sleep after catching up to limit this.
+
 ### Upgrading PostgreSQL installations
 
 Previous versions did not serialize appends on PostgreSQL:

@@ -171,3 +171,71 @@ Measurements with raw SQL in local Docker, best of 2 runs, for a query with one 
 | Two types only used early, backwards, `limit: 1` | MariaDB 11.4, 1M | 2ms | 969ms |
 
 Queries like this are typical, for example to check for the last event with a tag, and the cost grows with the log.
+
+## Wait for new events instead of polling
+
+Status: accepted
+
+### Context
+
+An idle worker has to find out when there is something new to read. Polling adds latency and queries, even if nothing happens. PostgreSQL can wake up a waiting connection with `LISTEN`/`NOTIFY`, but a notification can get lost, for example while a connection is being replaced, so it can't be the only mechanism.
+
+### Decision
+
+`DoctrineEventStore::createWaiter()` returns an `EventStoreWaiter` that blocks until there might be new events:
+
+```php
+$eventStore = new DoctrineEventStore(DoctrineEventStoreConfiguration::create($connection, 'events')->withNotifications());
+$waiter = $eventStore->createWaiter($dedicatedConnection);
+while (true) {
+    $checkpoint = catchUp($eventStore, $checkpoint);
+    $waiter->waitForNewEvents(30.0);
+}
+```
+
+| Topic | Decision |
+|---|---|
+| Emission | `SELECT pg_notify('<channel>', ''); COMMIT` as a single statement if the insert affected rows. This adds no round trip while the append lock is held, no notification is sent for a failed append condition, and no schema change is required |
+| Availability | Opt-in with `withNotifications()`. It only improves latency, and it costs every append even without a listener. It has no effect on other platforms |
+| Result | `true`: there might be new events, read now. It can be spurious. `false`: the head didn't change since the last check, including if a signal ended the wait early |
+| First call | Starts to listen, determines the head and returns `true` without waiting. The worker reads after the listener is active, so nothing can slip through between catching up and listening. The same applies after a reconnect |
+| Missed notifications | Whenever a wait ends without a notification, the waiter compares `head()` to the last known value. This covers lost notifications, writers without notifications and other writers. It compares for inequality, because the head can move backwards after a failover |
+| Coalescing | All queued notifications result in a single `true`. Notifications are delivered asynchronously, so one that arrives later causes an additional spurious `true` (42 of 200 rounds of 3 consecutive appends in local Docker) |
+| Channel | `dcb_` and the CRC32 of the table name. Channels are limited to 63 bytes, and `LISTEN` folds unquoted names to lower case while `pg_notify()` doesn't. A collision only causes a spurious wake-up |
+| Payload | Empty. A position would require an additional query or `RETURNING`, the result can't expose it, the worker has to read anyway, and every role in the database could see it |
+| Listener connection | Dedicated and provided by the caller, because `getParams()` of DBAL is internal, and the listener might need another DSN than the store, for example if that goes through PgBouncer in transaction mode. It has to connect to the primary, notifications don't reach replicas. A connection inside a transaction is rejected |
+| Driver | `pdo_pgsql` only, `pgsql` throws. `Pdo\Pgsql::getNotify()` if available, otherwise `PDO::pgsqlGetNotify()`: the former doesn't exist on PHP 8.3 or on a plain `PDO` instance, the latter is deprecated since PHP 8.5 |
+| Lost connections | Any database exception while waiting closes the connection and reconnects once within the same call, followed by `true`. A failing reconnect results in a `RuntimeException`, the next call tries again. Exception classes can't be used to detect this: PDO raises a plain error for a lost connection. There is no backoff, that is up to the worker |
+| Half-open connections | Accepted and documented. A dropped TCP connection can block the `head()` query until the operating system gives up, and PDO can't run it without blocking. Timeouts of 30 seconds or less keep the connection from looking idle to firewalls |
+| Timeout | Negative values are rejected, `0.0` doesn't block. Seconds are rounded up to milliseconds. It only applies to the wait, the `head()` query is added to it |
+| Signals | End the wait early without resuming it, so that a worker can react to a shutdown right away |
+| Polling | Used on MySQL/MariaDB and SQLite, and on PostgreSQL without `withNotifications()`. Calls `head()` once per interval (default: 1 second) with ±20% jitter per sleep, so that workers don't query at the same time |
+| Selection | By `createWaiter()`, so that table and channel can't diverge. A worker that forgets `withNotifications()` polls instead of relying on the timeout. Writers that forget it are not detectable: such a worker only notices events when its timeout expires |
+| Location | This package, as the core package has no concept of a head or waiting. It could move there later |
+
+### Consequences
+
+- Notifying commits are serialized across all tables, and appends to one table get slower as well. Installations with several busy event tables should measure this before enabling notifications.
+- Under constant appends workers wake up constantly, and a worker with a rare partition wakes up for events it doesn't care about. The read rate is only limited by the duration of the read, which can cause more load than polling. A worker that needs a limit can sleep after catching up.
+- A worker that reads from a lagging replica can get `true`, read nothing and block until the next event or timeout.
+- The listener occupies one database connection per worker.
+
+Measurements with raw SQL through pgbench, PostgreSQL 17 in local Docker, 16 clients, 8 seconds, mean of 2 runs (1 run with listeners). These are not production numbers. Round trips are close to zero, so the benefit of the single statement can't be seen here. The trigger table was created separately, so its lead on one table is weak evidence and its cause is unknown. The listeners shared the CPU with the database, which overstates their cost.
+
+| Appends/s | No notification | Separate statement | Single statement | Trigger |
+|---|---|---|---|---|
+| 1 table | 4559 | 3797 | 3776 | 4459 |
+| 4 tables | 8687 | 5951 | 6013 | 6175 |
+| 1 table, 8 listeners | - | 2230 | - | 2450 |
+
+### Rejected alternatives
+
+**`AFTER INSERT FOR EACH STATEMENT` trigger:** also notifies for writers outside of this package and was the fastest variant in the measurements. But it requires schema objects and running `setup()` on upgrade, and it also fires for an insert of 0 rows, which is every failed append condition, unless it inspects a transition table. Other writers already have to follow a documented protocol, and the `head()` comparison notices them.
+
+**`pg_notify()` as a separate statement:** an additional round trip while holding the append lock.
+
+**Position as payload:** see above.
+
+**Separate `start()` method:** a worker could catch up before calling it and miss events. Listening within the first call makes this impossible, and handles reconnects the same way.
+
+**Debounce in the waiter:** not required until measurements show otherwise. It can be added later without a breaking change.
