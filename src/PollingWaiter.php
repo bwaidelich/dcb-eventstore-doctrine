@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Wwwision\DCBEventStoreDoctrine;
 
-use Doctrine\DBAL\Exception as DbalException;
 use InvalidArgumentException;
 use RuntimeException;
 
@@ -50,7 +49,7 @@ final class PollingWaiter implements EventStoreWaiter
         }
         try {
             return $this->pollUntil(hrtime(true) + (int) ($timeoutSeconds * 1E9));
-        } catch (DbalException) {
+        } catch (RuntimeException) {
             $this->config->connection->close();
             $this->initialize();
             return true;
@@ -58,7 +57,7 @@ final class PollingWaiter implements EventStoreWaiter
     }
 
     /**
-     * @throws DbalException
+     * @throws RuntimeException
      */
     private function pollUntil(int $deadlineNanoseconds): bool
     {
@@ -80,7 +79,7 @@ final class PollingWaiter implements EventStoreWaiter
     }
 
     /**
-     * @throws DbalException
+     * @throws RuntimeException
      */
     private function headHasChanged(): bool
     {
@@ -95,7 +94,7 @@ final class PollingWaiter implements EventStoreWaiter
         try {
             $this->headHasChanged();
             $this->initialized = true;
-        } catch (DbalException $e) {
+        } catch (RuntimeException $e) {
             $this->config->connection->close();
             $this->initialized = false;
             throw new RuntimeException(sprintf('Failed to connect waiter: %s', $e->getMessage()), 1793750004, $e);

@@ -8,7 +8,6 @@ use Doctrine\DBAL\Exception as DbalException;
 use InvalidArgumentException;
 use PDO;
 use Pdo\Pgsql;
-use PDOException;
 use RuntimeException;
 
 use function ceil;
@@ -48,7 +47,7 @@ final class PostgresNotificationWaiter implements EventStoreWaiter
                 return true;
             }
             return $this->headHasChanged();
-        } catch (DbalException|PDOException) {
+        } catch (DbalException|RuntimeException) {
             // PDO raises a generic error for a lost connection, so it can't be told apart from other errors. Those will fail again in listen()
             $this->listen();
             return true;
@@ -56,7 +55,7 @@ final class PostgresNotificationWaiter implements EventStoreWaiter
     }
 
     /**
-     * @throws DbalException | PDOException
+     * @throws DbalException | RuntimeException
      */
     private function receiveNotification(int $timeoutMilliseconds): bool
     {
@@ -79,7 +78,7 @@ final class PostgresNotificationWaiter implements EventStoreWaiter
     }
 
     /**
-     * @throws DbalException
+     * @throws RuntimeException
      */
     private function headHasChanged(): bool
     {
@@ -99,7 +98,7 @@ final class PostgresNotificationWaiter implements EventStoreWaiter
             // Has to happen after LISTEN, so that nothing can slip through between the two
             $this->headHasChanged();
             $this->listening = true;
-        } catch (DbalException|PDOException $e) {
+        } catch (DbalException|RuntimeException $e) {
             $this->config->connection->close();
             throw new RuntimeException(sprintf('Failed to listen for notifications: %s', $e->getMessage()), 1793750014, $e);
         }
