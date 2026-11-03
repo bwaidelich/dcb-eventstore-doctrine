@@ -39,7 +39,7 @@ final class SetupTest extends TestCase
     {
         $dsn = getenv('DCB_TEST_DSN');
         if (!is_string($dsn)) {
-            $dsn = 'pdo-sqlite:///events_test.sqlite';
+            $dsn = 'pdo-sqlite://localhost/events_test.sqlite';
         }
         $config = new Configuration();
         $config->setSchemaManagerFactory(new DefaultSchemaManagerFactory());

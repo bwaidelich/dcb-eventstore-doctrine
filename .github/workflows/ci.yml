@@ -126,6 +126,58 @@ jobs:
       - name: Run consistency tests
         run: composer run-script test:consistency
 
+  integration-tests-sqlite:
+    name: integration-tests (PHP ${{ matrix.php-version }}, ${{ matrix.dependencies }} deps, SQLite)
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        php-version:
+          - '8.3'
+          - 'latest'
+        dependencies:
+          - 'lowest'
+          - 'highest'
+
+        exclude:
+          # doctrine/dbal 3.x leads to deprecation warnings on PHP 8.5+, so we skip it for now
+          - php-version: 'latest'
+            dependencies: 'lowest'
+
+    steps:
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php-version }}
+          extensions: pdo_sqlite
+
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Cache Composer packages
+        id: composer-cache
+        uses: actions/cache@v6
+        with:
+          path: vendor
+          key: ${{ runner.os }}-php${{ matrix.php-version }}-${{ hashFiles('**/composer.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-php${{ matrix.php-version }}-
+
+      - name: Install lowest dependencies
+        if: matrix.dependencies == 'lowest'
+        run: composer update --prefer-dist --prefer-lowest --no-progress
+
+      - name: Install highest dependencies
+        if: matrix.dependencies == 'highest'
+        run: composer update --prefer-dist --no-progress
+
+      - name: Run integration tests
+        run: composer run-script test:integration
+
+      - name: Run consistency tests
+        run: composer run-script test:consistency
+
   static-analysis:
     runs-on: ubuntu-latest
 

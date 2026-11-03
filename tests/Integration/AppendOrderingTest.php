@@ -54,7 +54,7 @@ final class AppendOrderingTest extends TestCase
     protected function setUp(): void
     {
         $dsn = getenv('DCB_TEST_DSN');
-        $this->dsn = is_string($dsn) ? $dsn : 'pdo-sqlite:///events_test.sqlite';
+        $this->dsn = is_string($dsn) ? $dsn : 'pdo-sqlite://localhost/events_test.sqlite';
         $this->connectionA = $this->connect();
         $this->readerConnection = $this->connect();
         $this->readerConnection->executeStatement('DROP TABLE IF EXISTS ' . self::TABLE);
