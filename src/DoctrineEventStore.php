@@ -289,6 +289,21 @@ final class DoctrineEventStore implements EventStore
         return SequencePosition::fromInteger((int) $head);
     }
 
+    /**
+     * Creates a waiter that lets an idle worker block until there might be new events
+     *
+     * @param Connection $dedicatedConnection Must not be used for anything else
+     * @param float $pollIntervalSeconds Only applies if the waiter can't be notified by the database
+     */
+    public function createWaiter(Connection $dedicatedConnection, float $pollIntervalSeconds = 1.0): EventStoreWaiter
+    {
+        $config = DoctrineEventStoreConfiguration::create($dedicatedConnection, $this->config->eventTableName);
+        if ($this->config->isPostgreSQL() && $this->config->notificationsEnabled) {
+            return new PostgresNotificationWaiter($config);
+        }
+        return new PollingWaiter($config, $pollIntervalSeconds);
+    }
+
     public function append(Events|Event $events, AppendCondition|null $condition = null): void
     {
         Assert::eq($this->config->connection->getTransactionNestingLevel(), 0, 'Failed to commit events because a database transaction is active already');
@@ -372,7 +387,9 @@ final class DoctrineEventStore implements EventStore
                 }
                 $affectedRows = (int) $this->config->connection->executeStatement($statement, $parameters, $parameterTypes);
                 if ($transactionStarted) {
-                    $this->config->connection->executeStatement('COMMIT');
+                    // A single statement doesn't add a round trip while the lock is held. It is delivered on commit only. See docs/decisions.md
+                    $notify = $this->config->notificationsEnabled && $affectedRows > 0;
+                    $this->config->connection->executeStatement($notify ? "SELECT pg_notify('{$this->config->notificationChannel()}', ''); COMMIT" : 'COMMIT');
                     $transactionStarted = false;
                 }
                 return $affectedRows;

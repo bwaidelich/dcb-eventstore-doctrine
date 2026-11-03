@@ -14,6 +14,9 @@ use Doctrine\DBAL\Platforms\SQLitePlatform;
 use Psr\Clock\ClockInterface;
 use RuntimeException;
 
+use function hash;
+use function sprintf;
+
 final class DoctrineEventStoreConfiguration
 {
     public readonly AbstractPlatform $platform;
@@ -23,6 +26,7 @@ final class DoctrineEventStoreConfiguration
         public readonly Connection $connection,
         public readonly string $eventTableName,
         public readonly ClockInterface $clock,
+        public readonly bool $notificationsEnabled = false,
     ) {
         try {
             $this->platform = $this->connection->getDatabasePlatform();
@@ -47,7 +51,25 @@ final class DoctrineEventStoreConfiguration
 
     public function withClock(ClockInterface $clock): self
     {
-        return new self($this->connection, $this->eventTableName, $clock);
+        return new self($this->connection, $this->eventTableName, $clock, $this->notificationsEnabled);
+    }
+
+    /**
+     * Notifies waiters about appended events on PostgreSQL, without effect on other platforms
+     *
+     * This has to be enabled for all writers and workers. It slows down appends, even across event tables. See docs/decisions.md
+     */
+    public function withNotifications(): self
+    {
+        return new self($this->connection, $this->eventTableName, $this->clock, true);
+    }
+
+    /**
+     * Name of the PostgreSQL channel: lower case and short enough for any table name. A collision only causes a spurious wake-up
+     */
+    public function notificationChannel(): string
+    {
+        return 'dcb_' . hash('crc32b', $this->eventTableName);
     }
 
     public function createUniqueParameterName(): string
