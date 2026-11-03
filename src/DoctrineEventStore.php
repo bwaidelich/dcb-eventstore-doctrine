@@ -14,6 +14,7 @@ use Doctrine\DBAL\Platforms\AbstractPlatform;
 use Doctrine\DBAL\Query\QueryBuilder;
 use Doctrine\DBAL\Schema\AbstractSchemaManager;
 use Doctrine\DBAL\Schema\Schema;
+use Doctrine\DBAL\Schema\Table;
 use Doctrine\DBAL\Types\Type;
 use Doctrine\DBAL\Types\Types;
 use JsonException;
@@ -37,11 +38,15 @@ use function hash;
 use function implode;
 use function json_encode;
 use function sprintf;
+use function strrpos;
+use function substr;
 
 use const JSON_THROW_ON_ERROR;
 
 final class DoctrineEventStore implements EventStore
 {
+    private const FORMER_TAGS_INDEX_NAME = 'tags';
+
     public function __construct(
         private readonly DoctrineEventStoreConfiguration $config,
     ) {}
@@ -78,9 +83,32 @@ final class DoctrineEventStore implements EventStore
             return $platform->getCreateTableSQL($this->databaseSchema($schemaManager)->getTable($this->config->eventTableName));
         }
         $tableSchema = $schemaManager->introspectTable($this->config->eventTableName);
+        $tagsIndexStatements = $this->config->isPostgreSQL() ? $this->removeTagsIndexFromComparison($tableSchema) : [];
         $fromSchema = new Schema([$tableSchema], [], $schemaManager->createSchemaConfig());
         $schemaDiff = $schemaManager->createComparator()->compareSchemas($fromSchema, $this->databaseSchema($schemaManager));
-        return $platform->getAlterSchemaSQL($schemaDiff);
+        return [...$tagsIndexStatements, ...$platform->getAlterSchemaSQL($schemaDiff)];
+    }
+
+    /**
+     * The GIN index on tags can't be expressed in the DBAL schema, so the comparator would drop it.
+     * Removing it from the comparison prevents setup() from rebuilding it, which can take long and blocks appends.
+     *
+     * @return list<string> statements that are required to keep the index
+     */
+    private function removeTagsIndexFromComparison(Table $tableSchema): array
+    {
+        $indexName = $this->indexName('tags');
+        if ($tableSchema->hasIndex($indexName)) {
+            $tableSchema->dropIndex($indexName);
+            return [];
+        }
+        if (!$tableSchema->hasIndex(self::FORMER_TAGS_INDEX_NAME)) {
+            return [];
+        }
+        $tableSchema->dropIndex(self::FORMER_TAGS_INDEX_NAME);
+        $schemaSeparatorPosition = strrpos($this->config->eventTableName, '.');
+        $schemaPrefix = $schemaSeparatorPosition === false ? '' : substr($this->config->eventTableName, 0, $schemaSeparatorPosition + 1);
+        return ['ALTER INDEX ' . $schemaPrefix . self::FORMER_TAGS_INDEX_NAME . ' RENAME TO ' . $indexName];
     }
 
     /**

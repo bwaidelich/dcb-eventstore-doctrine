@@ -31,6 +31,7 @@ final class SetupTest extends TestCase
 {
     private const TABLE_A = 'dcb_setup_test_a';
     private const TABLE_B = 'dcb_setup_test_b';
+    private const SCHEMA = 'dcb_setup_test';
 
     private Connection $connection;
 
@@ -75,9 +76,7 @@ final class SetupTest extends TestCase
     #[Test]
     public function setup_creates_a_tags_index_for_each_postgres_event_table(): void
     {
-        if (!$this->connection->getDatabasePlatform() instanceof PostgreSQLPlatform) {
-            self::markTestSkipped('The GIN index on tags only exists on PostgreSQL');
-        }
+        $this->skipUnlessPostgreSql();
         DoctrineEventStore::create($this->connection, self::TABLE_A)->setup();
         DoctrineEventStore::create($this->connection, self::TABLE_B)->setup();
 
@@ -124,7 +123,72 @@ final class SetupTest extends TestCase
         self::assertEqualsCanonicalizing($expectedIndexNames, $this->indexNames(self::TABLE_A));
     }
 
+    #[Test]
+    public function setup_does_not_rebuild_the_tags_index(): void
+    {
+        $this->skipUnlessPostgreSql();
+        $eventStore = DoctrineEventStore::create($this->connection, self::TABLE_A);
+        $eventStore->setup();
+        $indexOid = $this->tagsIndexOid(self::TABLE_A);
+
+        $eventStore->setup();
+
+        self::assertSame($indexOid, $this->tagsIndexOid(self::TABLE_A));
+    }
+
+    #[Test]
+    public function setup_renames_the_former_tags_index_without_rebuilding_it(): void
+    {
+        $this->skipUnlessPostgreSql();
+        // separate schema, because other tables of the test database might still own an index named "tags"
+        $tableName = self::SCHEMA . '.' . self::TABLE_A;
+        $this->connection->executeStatement('DROP SCHEMA IF EXISTS ' . self::SCHEMA . ' CASCADE');
+        $this->connection->executeStatement('CREATE SCHEMA ' . self::SCHEMA);
+        try {
+            $eventStore = DoctrineEventStore::create($this->connection, $tableName);
+            $eventStore->setup();
+            $expectedIndexName = $this->tagsIndexName($tableName);
+            $this->connection->executeStatement('DROP INDEX ' . self::SCHEMA . '.' . $expectedIndexName);
+            $this->connection->executeStatement("CREATE INDEX tags ON $tableName USING gin (tags jsonb_path_ops)");
+            $indexOid = $this->tagsIndexOid($tableName);
+
+            $eventStore->setup();
+
+            self::assertSame($expectedIndexName, $this->tagsIndexName($tableName));
+            self::assertSame($indexOid, $this->tagsIndexOid($tableName));
+        } finally {
+            $this->connection->executeStatement('DROP SCHEMA ' . self::SCHEMA . ' CASCADE');
+        }
+    }
+
     // -------------------------------------
+
+    private function skipUnlessPostgreSql(): void
+    {
+        if (!$this->connection->getDatabasePlatform() instanceof PostgreSQLPlatform) {
+            self::markTestSkipped('The GIN index on tags only exists on PostgreSQL');
+        }
+    }
+
+    private function tagsIndexOid(string $tableName): string
+    {
+        return $this->fetchTagsIndexColumn($tableName, 'i.indexrelid::text');
+    }
+
+    private function tagsIndexName(string $tableName): string
+    {
+        return $this->fetchTagsIndexColumn($tableName, 'c.relname');
+    }
+
+    private function fetchTagsIndexColumn(string $tableName, string $column): string
+    {
+        $value = $this->connection->fetchOne(
+            "SELECT $column FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_am a ON a.oid = c.relam WHERE i.indrelid = ?::regclass AND a.amname = 'gin'",
+            [$tableName],
+        );
+        self::assertIsString($value);
+        return $value;
+    }
 
     private function replaceSecondaryIndexes(string $tableName, bool $createFormerIndexes): void
     {
