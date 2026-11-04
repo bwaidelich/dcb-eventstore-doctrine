@@ -139,13 +139,24 @@ On PostgreSQL, `withNotifications()` makes appends send a notification on commit
 - **Load:** under constant appends workers read constantly, which can cause more load than polling. A worker can sleep after catching up to limit this.
 - **Stuck workers:** a listener only drains while its worker waits. If a worker hangs or is busy for long with its connection open, the notification queue of the PostgreSQL server fills up (8 GB by default). Once it is full, appends with notifications fail with a `RuntimeException`, also for other event tables. Monitor `pg_notification_queue_usage()`, and call `waitForNewEvents(0.0)` periodically during a long catch-up. Don't ignore a `true` from such a call: read again afterwards, otherwise the worker can wait although there are events it hasn't read.
 
-### Upgrading PostgreSQL installations
+### Upgrading to 7.0
+
+#### PostgreSQL
 
 Previous versions did not serialize appends on PostgreSQL:
 
 - **Deployment:** stop all processes running a previous version before the new version starts appending. While both run, subscribers can miss events and append conditions can be violated.
 - **Past events:** subscribers might have skipped events already, and this can't be detected or repaired automatically. If that is a concern, rebuild their projections.
 - **Throughput:** appends no longer run in parallel, see [Event ordering](#event-ordering).
+- **Lock timeout:** an append that doesn't get the lock within 30 seconds fails with a `RuntimeException`.
+- **Other writers:** anything else that writes to the event table has to take the same lock, see [Event ordering](#event-ordering).
+
+#### All platforms
+
+- **Exceptions:** `read()`, `readPartition()`, `head()` and the iteration over read events throw a `RuntimeException` instead of DBAL exceptions. Code that catches a specific DBAL exception has to inspect `getPrevious()` instead, see [Exceptions](#exceptions).
+- **Internal API:** `connection`, `platform`, `notificationChannel()`, `createUniqueParameterName()`, `resetUniqueParameterCount()`, `isPostgreSQL()`, `isSQLite()` and `isMySQL()` of `DoctrineEventStoreConfiguration` are now `@internal`. They still work, but can change without a major version.
+- **Index names:** index names now contain a hash of the table name. Existing tables work without a change. Running `setup()` once renames their indexes, and the GIN index on PostgreSQL isn't rebuilt.
+- **Dependencies:** `ext-pdo` is now required explicitly.
 
 ## Contribution
 
