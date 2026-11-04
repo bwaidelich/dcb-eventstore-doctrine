@@ -110,6 +110,8 @@ Checkpoints belong to the caller, so this package can't enforce the following. A
 
 If the database fails or JSON can't be converted, the event store throws a `RuntimeException` with the original exception as `getPrevious()`. This also applies while iterating over read events, because they are fetched lazily.
 
+The event store doesn't reconnect on its own. A long-running process can lose an idle connection, for example because of `wait_timeout` on MySQL/MariaDB, and the next call then fails. To recover, catch the `RuntimeException` and call `close()` on the connection: DBAL reconnects with the next statement. Before repeating an `append()`, keep in mind that the connection might have been lost after the commit. With an append condition that matches the appended events, the repeated call fails instead of appending them twice. Without one, the events can end up in the store twice.
+
 ### Waiting for new events
 
 An idle worker can block until there might be new events instead of polling on its own:
