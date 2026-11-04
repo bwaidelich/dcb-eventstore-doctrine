@@ -38,7 +38,7 @@ final class TagPartition
      */
     public static function create(string $prefix, int $partitions, int $partition): self
     {
-        Assert::regex($prefix, '/^[[:alnum:]\-\_\:]{1,' . Tag::LENGTH_MAX . '}$/', 'The prefix must only consist of characters that are valid in tags and must be between 1 and ' . Tag::LENGTH_MAX . ' characters long, given: %s');
+        Assert::regex($prefix, '/^[[:alnum:]\-_:]{1,' . Tag::LENGTH_MAX . '}$/', 'The prefix must only consist of characters that are valid in tags and must be between 1 and ' . Tag::LENGTH_MAX . ' characters long, given: %s');
         Assert::range($partitions, 1, self::PARTITIONS_MAX, 'The number of partitions must be between %2$d and %3$d, given: %1$d');
         Assert::range($partition, 0, $partitions - 1, 'The partition must be between %2$d and %3$d, given: %1$d');
         return new self($prefix, $partitions, $partition);

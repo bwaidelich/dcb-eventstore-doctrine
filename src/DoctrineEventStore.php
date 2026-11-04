@@ -33,7 +33,6 @@ use Wwwision\DCBEventStore\Query\QueryItem;
 use Wwwision\DCBEventStore\ReadOptions;
 use Wwwision\DCBEventStore\SequencedEvent\SequencedEvent;
 use Wwwision\DCBEventStore\SequencedEvent\SequencedEvents;
-
 use Wwwision\DCBEventStore\SequencedEvent\SequencePosition;
 
 use function count;
@@ -118,7 +117,8 @@ final class DoctrineEventStore implements EventStore
 
     /**
      * @param AbstractSchemaManager<AbstractPlatform> $schemaManager
-    */
+     * @throws DbalException
+     */
     private function databaseSchema(AbstractSchemaManager $schemaManager): Schema
     {
         $schemaConfiguration = $schemaManager->createSchemaConfig();
@@ -466,6 +466,9 @@ final class DoctrineEventStore implements EventStore
         }
     }
 
+    /**
+     * @throws DbalException | JsonException
+     */
     private function addDcbQueryConstraints(QueryBuilder $queryBuilder, Query $dcbQuery): void
     {
         if (!$dcbQuery->hasItems()) {
@@ -491,6 +494,8 @@ final class DoctrineEventStore implements EventStore
     /**
      * Alternative to {@see self::addDcbQueryConstraints()} for queries without "onlyLastEvent" that doesn't need a derived table.
      * That table is materialized with all matching events regardless of the requested position and limit.
+     *
+     * @throws JsonException
      */
     private function addDcbQueryWhereConstraints(QueryBuilder $queryBuilder, Query $dcbQuery): void
     {
@@ -505,6 +510,9 @@ final class DoctrineEventStore implements EventStore
         $queryBuilder->andWhere('(' . implode(' OR ', $itemConditions) . ')');
     }
 
+    /**
+     * @throws JsonException
+     */
     private function applyDcbQueryItemConstraints(QueryBuilder $queryBuilder, QueryItem $dcbQueryItem): void
     {
         foreach ($this->dcbQueryItemConditions($queryBuilder, $dcbQueryItem) as $condition) {
@@ -517,6 +525,7 @@ final class DoctrineEventStore implements EventStore
 
     /**
      * @return list<string> conditions that have to be combined with AND. The required parameters are added to the $queryBuilder
+     * @throws JsonException
      */
     private function dcbQueryItemConditions(QueryBuilder $queryBuilder, QueryItem $dcbQueryItem): array
     {
@@ -542,6 +551,7 @@ final class DoctrineEventStore implements EventStore
 
     /**
      * @param array<mixed> $row
+     * @throws JsonException
      */
     private static function databaseRowToSequencedEvent(array $row): SequencedEvent
     {
