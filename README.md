@@ -135,6 +135,7 @@ On PostgreSQL, `withNotifications()` makes appends send a notification on commit
 - **Other writers:** writers outside of this package don't notify. Their events are noticed when the timeout expires.
 - **Lost connections:** a waiter reconnects on its own and returns `true`. If that fails, it throws a `RuntimeException` and tries again on the next call, so a worker should catch it and back off. A silently dropped TCP connection can block until the operating system gives up. A timeout of 30 seconds or less keeps the connection from looking idle to firewalls.
 - **Load:** under constant appends workers read constantly, which can cause more load than polling. A worker can sleep after catching up to limit this.
+- **Stuck workers:** a listener only drains while its worker waits. If a worker hangs or is busy for long with its connection open, the notification queue of the PostgreSQL server fills up (8 GB by default). Once it is full, appends with notifications fail with a `RuntimeException`, also for other event tables. Monitor `pg_notification_queue_usage()`, and call `waitForNewEvents(0.0)` periodically during a long catch-up. Don't ignore a `true` from such a call: read again afterwards, otherwise the worker can wait although there are events it hasn't read.
 
 ### Upgrading PostgreSQL installations
 

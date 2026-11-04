@@ -196,7 +196,7 @@ while (true) {
 | Topic | Decision |
 |---|---|
 | Emission | `SELECT pg_notify('<channel>', ''); COMMIT` as a single statement if the insert affected rows. This adds no round trip while the append lock is held, no notification is sent for a failed append condition, and no schema change is required |
-| Availability | Opt-in with `withNotifications()`. It only improves latency, and it costs every append even without a listener. It has no effect on other platforms |
+| Availability | Opt-in with `withNotifications()`. It improves latency, but costs every append even without a listener, and a stuck listener can make appends fail (see consequences). It has no effect on other platforms |
 | Result | `true`: there might be new events, read now. It can be spurious. `false`: the head didn't change since the last check, including if a signal ended the wait early |
 | First call | Starts to listen, determines the head and returns `true` without waiting. The worker reads after the listener is active, so nothing can slip through between catching up and listening. The same applies after a reconnect |
 | Missed notifications | Whenever a wait ends without a notification, the waiter compares `head()` to the last known value. This covers lost notifications, writers without notifications and other writers. It compares for inequality, because the head can move backwards after a failover |
@@ -204,7 +204,7 @@ while (true) {
 | Channel | `dcb_` and the CRC32 of the table name. Channels are limited to 63 bytes, and `LISTEN` folds unquoted names to lower case while `pg_notify()` doesn't. A collision only causes a spurious wake-up |
 | Payload | Empty. A position would require an additional query or `RETURNING`, the result can't expose it, the worker has to read anyway, and every role in the database could see it |
 | Listener connection | Dedicated and provided by the caller, because `getParams()` of DBAL is internal, and the listener might need another DSN than the store, for example if that goes through PgBouncer in transaction mode. It has to connect to the primary, notifications don't reach replicas. A connection inside a transaction is rejected |
-| Driver | `pdo_pgsql` only, `pgsql` throws. `Pdo\Pgsql::getNotify()` if available, otherwise `PDO::pgsqlGetNotify()`: the former doesn't exist on PHP 8.3 or on a plain `PDO` instance, the latter is deprecated since PHP 8.5 |
+| Driver | `pdo_pgsql` only, `pgsql` throws. `Pdo\Pgsql::getNotify()` if available, otherwise `PDO::pgsqlGetNotify()`: the former doesn't exist on PHP 8.3 or on a plain `PDO` instance, the latter is deprecated since PHP 8.5. A plain `PDO` instance on PHP 8.5 raises that deprecation on every wait, which is accepted: it requires a caller-supplied `PDO` or a DBAL version without `PDO::connect()`, and PHP 8.3 needs the method anyway |
 | Lost connections | Any database exception while waiting closes the connection and reconnects once within the same call, followed by `true`. A failing reconnect results in a `RuntimeException`, the next call tries again. Exception classes can't be used to detect this: PDO raises a plain error for a lost connection. There is no backoff, that is up to the worker |
 | Half-open connections | Accepted and documented. A dropped TCP connection can block the `head()` query until the operating system gives up, and PDO can't run it without blocking. Timeouts of 30 seconds or less keep the connection from looking idle to firewalls |
 | Timeout | Negative values are rejected, `0.0` doesn't block. Seconds are rounded up to milliseconds. It only applies to the wait, the `head()` query is added to it |
@@ -219,6 +219,9 @@ while (true) {
 - Under constant appends workers wake up constantly, and a worker with a rare partition wakes up for events it doesn't care about. The read rate is only limited by the duration of the read, which can cause more load than polling. A worker that needs a limit can sleep after catching up.
 - A worker that reads from a lagging replica can get `true`, read nothing and block until the next event or timeout.
 - The listener occupies one database connection per worker.
+- A listener only drains while its worker waits. If a worker hangs or is busy for long with its connection open, the notification queue of the database fills up. Once it is full, every notifying commit fails, so appends throw a `RuntimeException` and add no events. The queue is shared by the whole PostgreSQL server, so this also affects other event tables. By default the queue holds 8 GB, which is an estimated 4 days at 800 appends/s (32 bytes per entry, not measured). Installations should monitor `pg_notification_queue_usage()`, and a worker should call `waitForNewEvents(0.0)` periodically during a long catch-up. It has to read again after a `true` from such a call, because that call also updates the last known head.
+
+Reproduced with PostgreSQL 17 in local Docker and `max_notify_queue_pages = 64` (512 KB): the queue was full after about 212,000 unread notifications, most of them presumably held in socket buffers. A notifying append then failed with SQLSTATE 54000 and added no event, while an append without notifications succeeded. One `waitForNewEvents(0.0)` emptied the queue, and notifying appends succeeded again.
 
 Measurements with raw SQL through pgbench, PostgreSQL 17 in local Docker, 16 clients, 8 seconds, mean of 2 runs (1 run with listeners). These are not production numbers. Round trips are close to zero, so the benefit of the single statement can't be seen here. The trigger table was created separately, so its lead on one table is weak evidence and its cause is unknown. The listeners shared the CPU with the database, which overstates their cost.
 
@@ -239,6 +242,8 @@ Measurements with raw SQL through pgbench, PostgreSQL 17 in local Docker, 16 cli
 **Separate `start()` method:** a worker could catch up before calling it and miss events. Listening within the first call makes this impossible, and handles reconnects the same way.
 
 **Debounce in the waiter:** not required until measurements show otherwise. It can be added later without a breaking change.
+
+**Retrying an append without a notification if the queue is full:** would keep writes available, and workers would notice the events when their timeout expires. But it adds a rarely used retry path, and CI can't cover it without a custom server setting. To revisit if this happens in production.
 
 ## Don't expose exceptions of the database library
 
