@@ -239,3 +239,31 @@ Measurements with raw SQL through pgbench, PostgreSQL 17 in local Docker, 16 cli
 **Separate `start()` method:** a worker could catch up before calling it and miss events. Listening within the first call makes this impossible, and handles reconnects the same way.
 
 **Debounce in the waiter:** not required until measurements show otherwise. It can be added later without a breaking change.
+
+## Don't expose exceptions of the database library
+
+Status: accepted
+
+### Context
+
+`append()` and `setup()` already converted most exceptions of DBAL, but `read()`, `readPartition()`, `head()` and the iteration over read events didn't. Callers had to know about the adapter's library, although `EventStore` doesn't mention it.
+
+### Decision
+
+Public methods of `DoctrineEventStore` throw a `RuntimeException` with the DBAL or JSON exception as `$previous`.
+
+| Topic | Decision |
+|---|---|
+| Exception class | `RuntimeException`, like the existing conversions. Nothing has to tell these failures apart so far, and a subclass can be added later without a breaking change |
+| Lazy reads | Events are fetched while iterating, so the generator converts exceptions as well |
+| JSON | A `JsonException` is converted the same way. It can be caused by metadata that can't be encoded, or by tags in a row that can't be decoded |
+| Failing rollback | Ignored, so that it can't replace the exception that caused it. The transaction ends with the connection |
+| Waiters | Catch `RuntimeException` from `head()` to reconnect |
+
+### Consequences
+
+- Breaking for callers that catch a specific DBAL exception from `read()`, `readPartition()`, `head()` or while iterating. They have to inspect `getPrevious()` instead.
+
+### Rejected alternatives
+
+**Dedicated exception class:** no caller needs it yet.

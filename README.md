@@ -106,6 +106,10 @@ Checkpoints belong to the caller, so this package can't enforce the following. A
 - **Halving `n`:** partitions `k` and `k + n` merge into `k`, which continues from the lower of both checkpoints. It sees some events again, so handlers must be idempotent.
 - **Any other change:** rebuild the projection, because most tags move to a different partition.
 
+### Exceptions
+
+If the database fails or JSON can't be converted, the event store throws a `RuntimeException` with the original exception as `getPrevious()`. This also applies while iterating over read events, because they are fetched lazily.
+
 ### Waiting for new events
 
 An idle worker can block until there might be new events instead of polling on its own:

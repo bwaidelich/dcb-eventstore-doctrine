@@ -33,7 +33,6 @@ use Wwwision\DCBEventStore\Query\QueryItem;
 use Wwwision\DCBEventStore\ReadOptions;
 use Wwwision\DCBEventStore\SequencedEvent\SequencedEvent;
 use Wwwision\DCBEventStore\SequencedEvent\SequencedEvents;
-
 use Wwwision\DCBEventStore\SequencedEvent\SequencePosition;
 
 use function count;
@@ -118,7 +117,8 @@ final class DoctrineEventStore implements EventStore
 
     /**
      * @param AbstractSchemaManager<AbstractPlatform> $schemaManager
-    */
+     * @throws DbalException
+     */
     private function databaseSchema(AbstractSchemaManager $schemaManager): Schema
     {
         $schemaConfiguration = $schemaManager->createSchemaConfig();
@@ -164,15 +164,22 @@ final class DoctrineEventStore implements EventStore
         return 'idx_' . hash('crc32b', $this->config->eventTableName) . '_' . $suffix;
     }
 
+    /**
+     * @throws RuntimeException if the database fails or returns invalid JSON, here or while iterating over the returned events
+     */
     public function read(Query $query, ReadOptions|null $options = null): SequencedEvents
     {
-        $queryBuilder = $this->createReadQueryBuilder($options);
-        if (self::isSingleEventTypeQuery($query)) {
-            $this->addDcbQueryWhereConstraints($queryBuilder, $query);
-        } else {
-            $this->addDcbQueryConstraints($queryBuilder, $query);
+        try {
+            $queryBuilder = $this->createReadQueryBuilder($options);
+            if (self::isSingleEventTypeQuery($query)) {
+                $this->addDcbQueryWhereConstraints($queryBuilder, $query);
+            } else {
+                $this->addDcbQueryConstraints($queryBuilder, $query);
+            }
+            return self::fetchSequencedEvents($queryBuilder);
+        } catch (DbalException|JsonException $e) {
+            throw self::readFailed($e);
         }
-        return self::fetchSequencedEvents($queryBuilder);
     }
 
     /**
@@ -184,7 +191,7 @@ final class DoctrineEventStore implements EventStore
      * the last event if the batch reached the limit, or after $until otherwise. See README.
      *
      * @param SequencePosition|null $until If specified, only events up to and including this position will be returned. Can't be combined with reading backwards
-     * @throws RuntimeException if the database platform doesn't support partitioned reads (SQLite)
+     * @throws RuntimeException if the database platform doesn't support partitioned reads (SQLite), or if the database fails or returns invalid JSON, here or while iterating over the returned events
      * @throws InvalidArgumentException if the $query contains items with "onlyLastEvent" or if $until is combined with reading backwards
      */
     public function readPartition(TagPartition $partition, Query $query, ReadOptions|null $options = null, SequencePosition|null $until = null): SequencedEvents
@@ -200,20 +207,24 @@ final class DoctrineEventStore implements EventStore
         if ($until !== null && $options !== null && $options->backwards) {
             throw new InvalidArgumentException('Partitioned reads do not support "until" when reading backwards', 1793664003);
         }
-        $queryBuilder = $this->createReadQueryBuilder($options);
-        $this->addDcbQueryWhereConstraints($queryBuilder, $query);
-        if ($until !== null) {
-            $queryBuilder->andWhere('events.sequence_number <= :until')->setParameter('until', $until->value, ParameterType::INTEGER);
+        try {
+            $queryBuilder = $this->createReadQueryBuilder($options);
+            $this->addDcbQueryWhereConstraints($queryBuilder, $query);
+            if ($until !== null) {
+                $queryBuilder->andWhere('events.sequence_number <= :until')->setParameter('until', $until->value, ParameterType::INTEGER);
+            }
+            $queryBuilder
+                ->andWhere($this->partitionConstraint())
+                ->setParameter('partitionPrefix', $partition->prefix)
+                ->setParameter('partitions', $partition->partitions, ParameterType::INTEGER)
+                ->setParameter('partition', $partition->partition, ParameterType::INTEGER);
+            if (!$this->config->isPostgreSQL()) {
+                $queryBuilder->setParameter('partitionPrefixLength', strlen($partition->prefix), ParameterType::INTEGER);
+            }
+            return self::fetchSequencedEvents($queryBuilder);
+        } catch (DbalException|JsonException $e) {
+            throw self::readFailed($e);
         }
-        $queryBuilder
-            ->andWhere($this->partitionConstraint())
-            ->setParameter('partitionPrefix', $partition->prefix)
-            ->setParameter('partitions', $partition->partitions, ParameterType::INTEGER)
-            ->setParameter('partition', $partition->partition, ParameterType::INTEGER);
-        if (!$this->config->isPostgreSQL()) {
-            $queryBuilder->setParameter('partitionPrefixLength', strlen($partition->prefix), ParameterType::INTEGER);
-        }
-        return self::fetchSequencedEvents($queryBuilder);
     }
 
     /**
@@ -260,14 +271,26 @@ final class DoctrineEventStore implements EventStore
         return $queryBuilder;
     }
 
+    /**
+     * @throws DbalException
+     */
     private static function fetchSequencedEvents(QueryBuilder $queryBuilder): SequencedEvents
     {
         $result = $queryBuilder->executeQuery();
         return SequencedEvents::create(static function () use ($result) {
-            while (($row = $result->fetchAssociative()) !== false) {
-                yield self::databaseRowToSequencedEvent($row);
+            try {
+                while (($row = $result->fetchAssociative()) !== false) {
+                    yield self::databaseRowToSequencedEvent($row);
+                }
+            } catch (DbalException|JsonException $e) {
+                throw self::readFailed($e);
             }
         });
+    }
+
+    private static function readFailed(DbalException|JsonException $previous): RuntimeException
+    {
+        return new RuntimeException(sprintf('Failed to read events: %s', $previous->getMessage()), 1793840001, $previous);
     }
 
     /**
@@ -275,13 +298,19 @@ final class DoctrineEventStore implements EventStore
      *
      * NOTE: This must not read the counter of the sequence or AUTO_INCREMENT column: It is ahead of the committed
      * events while an append is in flight, so a worker would checkpoint past events it hasn't seen yet
+     *
+     * @throws RuntimeException if the database fails
      */
     public function head(): SequencePosition|null
     {
-        $head = $this->config->connection->createQueryBuilder()
-            ->select('MAX(sequence_number)')
-            ->from($this->config->eventTableName)
-            ->fetchOne();
+        try {
+            $head = $this->config->connection->createQueryBuilder()
+                ->select('MAX(sequence_number)')
+                ->from($this->config->eventTableName)
+                ->fetchOne();
+        } catch (DbalException $e) {
+            throw new RuntimeException(sprintf('Failed to determine the head: %s', $e->getMessage()), 1793840002, $e);
+        }
         if ($head === null) {
             return null;
         }
@@ -298,7 +327,7 @@ final class DoctrineEventStore implements EventStore
     public function createWaiter(Connection $dedicatedConnection, float $pollIntervalSeconds = 1.0): EventStoreWaiter
     {
         $config = DoctrineEventStoreConfiguration::create($dedicatedConnection, $this->config->eventTableName);
-        if ($this->config->isPostgreSQL() && $this->config->notificationsEnabled) {
+        if ($this->config->notificationsEnabled && $this->config->isPostgreSQL()) {
             return new PostgresNotificationWaiter($config);
         }
         return new PollingWaiter($config, $pollIntervalSeconds);
@@ -324,7 +353,11 @@ final class DoctrineEventStore implements EventStore
             }
             $parameters['e' . $eventIndex . '_type'] = $event->type->value;
             $parameters['e' . $eventIndex . '_data'] = $event->data->value;
-            $parameters['e' . $eventIndex . '_metadata'] = json_encode($event->metadata->value, JSON_THROW_ON_ERROR);
+            try {
+                $parameters['e' . $eventIndex . '_metadata'] = json_encode($event->metadata->value, JSON_THROW_ON_ERROR);
+            } catch (JsonException $e) {
+                throw new RuntimeException(sprintf('Failed to JSON encode metadata: %s', $e->getMessage()), 1793840004, $e);
+            }
             $parameters['e' . $eventIndex . '_tags'] = $tags;
             $parameters['e' . $eventIndex . '_recordedAt'] = $now->format('Y-m-d H:i:s');
             $eventIndex++;
@@ -334,15 +367,19 @@ final class DoctrineEventStore implements EventStore
         $statement = "INSERT INTO {$this->config->eventTableName} (type, data, metadata, tags, recorded_at) SELECT * FROM ( $unionSelects ) new_events";
         $parameterTypes = [];
         if ($condition !== null) {
-            $conditionQueryBuilder = $this->config->connection->createQueryBuilder()->select('1')->from($this->config->eventTableName, 'events');
-            $this->addDcbQueryConstraints($conditionQueryBuilder, $condition->failIfEventsMatch);
-            if ($condition->after !== null) {
-                $conditionQueryBuilder->andWhere('events.sequence_number > :highestSequenceNumber');
-                $conditionQueryBuilder->setParameter('highestSequenceNumber', $condition->after->value);
+            try {
+                $conditionQueryBuilder = $this->config->connection->createQueryBuilder()->select('1')->from($this->config->eventTableName, 'events');
+                $this->addDcbQueryConstraints($conditionQueryBuilder, $condition->failIfEventsMatch);
+                if ($condition->after !== null) {
+                    $conditionQueryBuilder->andWhere('events.sequence_number > :highestSequenceNumber');
+                    $conditionQueryBuilder->setParameter('highestSequenceNumber', $condition->after->value);
+                }
+                $parameters = [...$parameters, ...$conditionQueryBuilder->getParameters()];
+                $parameterTypes = $conditionQueryBuilder->getParameterTypes();
+                $statement .= ' WHERE NOT EXISTS (' . $conditionQueryBuilder->getSQL() . ')';
+            } catch (DbalException|JsonException $e) {
+                throw new RuntimeException(sprintf('Failed to build the append condition: %s', $e->getMessage()), 1793840003, $e);
             }
-            $parameters = [...$parameters, ...$conditionQueryBuilder->getParameters()];
-            $parameterTypes = $conditionQueryBuilder->getParameterTypes();
-            $statement .= ' WHERE NOT EXISTS (' . $conditionQueryBuilder->getSQL() . ')';
         }
         $affectedRows = $this->commitStatement($statement, $parameters, $parameterTypes);
         if ($affectedRows === 0 && $condition !== null) {
@@ -403,7 +440,7 @@ final class DoctrineEventStore implements EventStore
             } catch (DbalException $e) {
                 // MariaDB error 1467 ("Failed to read auto-increment value from storage engine") is a transient
                 // concurrency failure under SERIALIZABLE isolation — treat it like a deadlock and retry
-                if ((int) $e->getCode() === 1467 && $retryAttempt < $maxRetryAttempts) {
+                if ($retryAttempt < $maxRetryAttempts && (int) $e->getCode() === 1467) {
                     usleep((int) ($retryWaitInterval * 1E6));
                     $retryAttempt++;
                     $retryWaitInterval *= 2;
@@ -412,7 +449,11 @@ final class DoctrineEventStore implements EventStore
                 throw new RuntimeException(sprintf('Failed to commit events (error code: %d): %s', (int) $e->getCode(), $e->getMessage()), 1685956215, $e);
             } finally {
                 if ($transactionStarted) {
-                    $this->config->connection->executeStatement('ROLLBACK');
+                    try {
+                        $this->config->connection->executeStatement('ROLLBACK');
+                    } catch (DbalException) {
+                        // ignore – a failing rollback must not replace the original exception, the transaction ends with the connection
+                    }
                 }
                 if ($mysqlAdvisoryLockName !== null) {
                     try {
@@ -425,6 +466,9 @@ final class DoctrineEventStore implements EventStore
         }
     }
 
+    /**
+     * @throws DbalException | JsonException
+     */
     private function addDcbQueryConstraints(QueryBuilder $queryBuilder, Query $dcbQuery): void
     {
         if (!$dcbQuery->hasItems()) {
@@ -450,6 +494,8 @@ final class DoctrineEventStore implements EventStore
     /**
      * Alternative to {@see self::addDcbQueryConstraints()} for queries without "onlyLastEvent" that doesn't need a derived table.
      * That table is materialized with all matching events regardless of the requested position and limit.
+     *
+     * @throws JsonException
      */
     private function addDcbQueryWhereConstraints(QueryBuilder $queryBuilder, Query $dcbQuery): void
     {
@@ -464,6 +510,9 @@ final class DoctrineEventStore implements EventStore
         $queryBuilder->andWhere('(' . implode(' OR ', $itemConditions) . ')');
     }
 
+    /**
+     * @throws JsonException
+     */
     private function applyDcbQueryItemConstraints(QueryBuilder $queryBuilder, QueryItem $dcbQueryItem): void
     {
         foreach ($this->dcbQueryItemConditions($queryBuilder, $dcbQueryItem) as $condition) {
@@ -476,6 +525,7 @@ final class DoctrineEventStore implements EventStore
 
     /**
      * @return list<string> conditions that have to be combined with AND. The required parameters are added to the $queryBuilder
+     * @throws JsonException
      */
     private function dcbQueryItemConditions(QueryBuilder $queryBuilder, QueryItem $dcbQueryItem): array
     {
@@ -501,6 +551,7 @@ final class DoctrineEventStore implements EventStore
 
     /**
      * @param array<mixed> $row
+     * @throws JsonException
      */
     private static function databaseRowToSequencedEvent(array $row): SequencedEvent
     {

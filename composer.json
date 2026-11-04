@@ -21,6 +21,7 @@
   ],
   "require": {
     "php": ">=8.3",
+    "ext-pdo": "*",
     "ramsey/uuid": "^4.7",
     "psr/clock": "^1",
     "webmozart/assert": "^1.11 || ^2",
@@ -28,6 +29,7 @@
     "wwwision/dcb-eventstore": "^5.0.1"
   },
   "require-dev": {
+    "ext-pcntl": "*",
     "roave/security-advisories": "dev-latest",
     "phpstan/phpstan": "^2",
     "friendsofphp/php-cs-fixer": "^3.88",
