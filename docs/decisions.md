@@ -272,3 +272,115 @@ Public methods of `DoctrineEventStore` throw a `RuntimeException` with the DBAL 
 ### Rejected alternatives
 
 **Dedicated exception class:** no caller needs it yet.
+
+## Keep one package for all database platforms
+
+Status: accepted
+
+### Context
+
+Some features differ per platform: `readPartition()` throws on SQLite, and `withNotifications()` has no effect outside of PostgreSQL. Dedicated packages would express that in their types instead of at runtime.
+
+### Decision
+
+PostgreSQL, MySQL/MariaDB and SQLite stay in one package, and the platform checks stay inline in `DoctrineEventStore`.
+
+| Topic | Decision |
+|---|---|
+| Size of the differences | 16 platform checks in 580 lines of `DoctrineEventStore`, the rest is shared |
+| Dependencies | Would be almost identical per package, so a split wouldn't save installing anything |
+| Platform strategy class | Not extracted. It would refactor the append locking without a need as long as there is one package |
+| Revisit | If a platform needs a different schema or append strategy |
+
+### Consequences
+
+- Methods can throw or have no effect depending on the platform, which only the documentation states.
+
+### Rejected alternatives
+
+**One package per platform:** requires 3 packages and probably a shared one, each with its own release and CI.
+
+## Keep Doctrine DBAL
+
+Status: accepted
+
+### Context
+
+DBAL hardly appears in the public API anymore: `create()` and `createWaiter()` accept a `Connection`, and exceptions are converted. `QueryBuilder` mostly assembles strings, `setup()` has to work around the comparator to keep the GIN index, and the waiter needs `pdo_pgsql` anyway. Using PDO directly would remove a dependency and the need to support several major versions of it.
+
+### Decision
+
+The package keeps requiring `doctrine/dbal` `^3.6 || ^4`.
+
+| Topic | Decision |
+|---|---|
+| Replaced functionality | Schema comparison, expansion of array parameters and deadlock detection would have to be implemented for 3 platforms |
+| Reconnecting | The documented recovery calls `close()` on the connection, and DBAL reconnects with the next statement. PDO can't do that, so `create()` would need a connection factory |
+| Consumers | Other packages of the DCB ecosystem use DBAL themselves |
+| Name | Dropping DBAL requires renaming the package |
+| Timing | The upgrade to 7.0 already requires stopping all writers on PostgreSQL, so it shouldn't include a rewrite as well |
+| Configuration | `connection`, `platform`, `notificationChannel()`, the parameter name methods and the platform checks of `DoctrineEventStoreConfiguration` are `@internal`, so that a later change doesn't have to treat them as public API |
+| Revisit | Can be a separate major version: the public DBAL surface is limited to the `Connection` parameters |
+
+### Rejected alternatives
+
+**PDO in 7.0:** see above.
+
+**Dropping DBAL 3:** 3.x support was added back on purpose, and removing it would only simplify the CI matrix.
+
+## Keep supporting `onlyLastEvent`
+
+Status: accepted
+
+### Context
+
+`onlyLastEvent` isn't part of the DCB specification, and a decision model that needs it for several query items can be built without it:
+
+```php
+$head = $eventStore->read(Query::all(), ReadOptions::create(limit: 1, backwards: true))->first()?->position;
+// one read per query item, for example with backwards and limit: 1
+$eventStore->append($events, AppendCondition::create(failIfEventsMatch: $mergedQuery, after: $head));
+```
+
+The head has to be determined first: taking `after` from the reads can lose an update, because an event matching the first read can land below the position returned by a later one. An event landing after the head that a read sees only makes the append fail, which is safe.
+
+### Decision
+
+`onlyLastEvent` keeps working in `read()` and in append conditions. It is rejected by `readPartition()` as before. The chained append above is recommended for new code.
+
+| Topic | Decision |
+|---|---|
+| Cost of keeping it | About 15 lines and one test in this package. New read paths have to handle it |
+| Owner | `QueryItem` of `wwwision/dcb-eventstore`. Rejecting it here only would make code written against `EventStore` fail depending on the adapter. Silently ignoring it isn't an option: reads would return every matching event |
+| Removal | A later major version of the core package, after other adapters and `AtomicProjection` of `wwwision/dcb-tools` and `wwwision/dcb-library` have migrated |
+| Benchmark before removal | A `limit: 1` read for several event types uses the derived table with all matching events, so it could be much slower than `MAX()`. This hasn't been measured |
+| Derived table | Removing `onlyLastEvent` wouldn't remove it: using the `WHERE` clause for all queries was rejected because of query plans, see [the decision about `read()`](#apply-a-query-for-one-event-type-without-a-derived-table) |
+| Append conditions | The flag makes no semantic difference there: the last match is after a position if any match is. Simplifying these queries is a separate change that requires benchmarks, because they run while the append lock is held |
+
+### Consequences
+
+The chained append takes one read more than the number of query items, instead of a single read. All of them have to read from the primary or an equally current source: a head from a replica that is further ahead than the one serving a read hides events below `after`, so the append can wrongly succeed. It also relies on [the identical sequence and visibility order](#serialize-appends-on-postgresql-to-keep-sequence-order-and-visibility-order-identical). A single query item doesn't need the head: read with `backwards` and `limit: 1`, and use the position of the returned event as `after`.
+
+### Rejected alternatives
+
+**Removing it in 7.0:** ties this release to a major version of the core package and to migrating every consumer, without a significant simplification here. Removing it later breaks the same code as removing it now.
+
+## Keep extensions out of the core package
+
+Status: accepted
+
+### Context
+
+`head()`, `createWaiter()` and `readPartition()` were added here and could be useful for other adapters.
+
+### Decision
+
+They stay in this package until a consumer outside of it needs them.
+
+| Feature | Reason |
+|---|---|
+| `head()` | Adding it to `EventStore` breaks every implementation and requires a major version of the core package. `read(Query::all(), ReadOptions::create(limit: 1, backwards: true))` already determines the head with any adapter. It isn't part of the DCB specification either |
+| `EventStoreWaiter` | No consumer outside of this package so far |
+| `TagPartition`, `readPartition()` | No consumer outside of this package so far. Also outside of the DCB specification and specific to SQL |
+
+These guarantees aren't specific to this package though, and should be documented in `EventStore` of the core package: a reader never sees a position before all lower ones that are going to be committed, and failures of the underlying storage result in a `RuntimeException`, also while iterating over read events. A portable test for the order should get its own group in the test base of the core package, so that adapters can opt out while they are being checked. Until then, `AppendOrderingTest` stays here. None of this blocks a release of this package.
