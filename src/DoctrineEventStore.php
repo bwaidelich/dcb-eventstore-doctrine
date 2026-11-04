@@ -188,7 +188,7 @@ final class DoctrineEventStore implements EventStore
      * An event with multiple matching tags is returned by every partition that owns one of them, an event without a matching tag by none.
      *
      * To avoid rescanning positions without matching events, specify {@see self::head()} as $until. A worker can then continue after
-     * the last event if the batch reached the limit, or after $until otherwise. See README.
+     * the last event if the batch reached the limit, or after $until otherwise. See docs/advanced.md
      *
      * @param SequencePosition|null $until If specified, only events up to and including this position will be returned. Can't be combined with reading backwards
      * @throws RuntimeException if the database platform doesn't support partitioned reads (SQLite), or if the database fails or returns invalid JSON, here or while iterating over the returned events
