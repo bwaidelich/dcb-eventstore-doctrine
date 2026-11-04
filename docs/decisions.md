@@ -33,7 +33,7 @@ COMMIT;
 | Lock timeout | 30 seconds like the `GET_LOCK` of the MySQL path. A timeout results in a `RuntimeException` and isn't retried |
 | MySQL/MariaDB | Unchanged, the existing `GET_LOCK` already covers the commit. The ordering tests pass without changes |
 | SQLite | Unchanged, because it has a single writer. The ordering tests pass without changes |
-| Guarantee | Only covers appends through `DoctrineEventStore` on a single primary. Other writers have to take the same lock (see README). `GET_LOCK` doesn't protect multi-primary setups like Galera |
+| Guarantee | Only covers appends through `DoctrineEventStore` on a single primary. Other writers have to take the same lock (see [Event ordering](advanced.md#event-ordering)). `GET_LOCK` doesn't protect multi-primary setups like Galera |
 | Upgrade | Stop old writers before new ones start appending. Old writers skip the lock, so during an overlap gaps remain possible and append conditions can be violated. Events that subscribers skipped in the past are not recovered |
 
 ### Consequences

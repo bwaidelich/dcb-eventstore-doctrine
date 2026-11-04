@@ -36,7 +36,7 @@ use const PHP_BINARY;
 /**
  * An append that is still in flight (connection A) must not allow a later one (process B) to become visible first.
  *
- * Connection A follows the protocol documented for writers that bypass the event store (see README).
+ * Connection A follows the protocol documented for writers that bypass the event store (see docs/advanced.md).
  */
 #[CoversClass(DoctrineEventStore::class)]
 final class AppendOrderingTest extends TestCase
