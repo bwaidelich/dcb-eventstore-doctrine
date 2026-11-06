@@ -11,23 +11,14 @@ use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
 use Doctrine\DBAL\Schema\DefaultSchemaManagerFactory;
 use Doctrine\DBAL\Tools\DsnParser;
 use InvalidArgumentException;
-use PDO;
-use Pdo\Pgsql;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
-use Wwwision\DCBEventStore\AppendCondition\AppendCondition;
 use Wwwision\DCBEventStore\Event\Event;
-use Wwwision\DCBEventStore\Exceptions\ConditionalAppendFailed;
-use Wwwision\DCBEventStore\Query\Query;
-use Wwwision\DCBEventStore\Query\QueryItem;
 use Wwwision\DCBEventStoreDoctrine\DoctrineEventStore;
 use Wwwision\DCBEventStoreDoctrine\DoctrineEventStoreConfiguration;
-use Wwwision\DCBEventStoreDoctrine\PollingWaiter;
-use Wwwision\DCBEventStoreDoctrine\PostgresNotificationWaiter;
 
-use function extension_loaded;
 use function function_exists;
 use function getenv;
 use function is_string;
@@ -47,7 +38,6 @@ use const SIGALRM;
 final class EventStoreWaiterTest extends TestCase
 {
     private const TABLE = 'dcb_waiter_test';
-    private const OTHER_TABLE = 'dcb_waiter_test_other';
 
     private string $dsn;
     private Connection $connection;
@@ -134,7 +124,7 @@ final class EventStoreWaiterTest extends TestCase
     #[Test]
     public function detects_events_while_blocked(): void
     {
-        $waiter = $this->notifyingEventStore()->createWaiter($this->waiterConnection, 0.05);
+        $waiter = $this->eventStore->createWaiter($this->waiterConnection, 0.05);
         $waiter->waitForNewEvents(0.0);
 
         $process = $this->appendInSeparateProcess();
@@ -153,7 +143,7 @@ final class EventStoreWaiterTest extends TestCase
         if (!function_exists('pcntl_alarm')) {
             self::markTestSkipped('Requires the pcntl extension');
         }
-        $waiter = $this->notifyingEventStore()->createWaiter($this->waiterConnection);
+        $waiter = $this->eventStore->createWaiter($this->waiterConnection);
         $waiter->waitForNewEvents(0.0);
 
         $previousAsyncSignals = pcntl_async_signals(true);
@@ -187,155 +177,10 @@ final class EventStoreWaiterTest extends TestCase
     }
 
     #[Test]
-    public function a_successful_append_notifies_listeners_on_postgresql(): void
-    {
-        $this->skipUnlessPostgreSql();
-        $this->listenOnWaiterConnection();
-
-        $this->notifyingEventStore()->append(Event::create('SomeEvent', 'a', [], []));
-
-        self::assertSame(1, $this->countNotifications());
-    }
-
-    #[Test]
-    public function a_failed_append_condition_does_not_notify_listeners(): void
-    {
-        $this->skipUnlessPostgreSql();
-        $eventStore = $this->notifyingEventStore();
-        $eventStore->append(Event::create('SomeEvent', 'a', ['some:tag'], []));
-        $this->listenOnWaiterConnection();
-
-        try {
-            $eventStore->append(Event::create('SomeEvent', 'b', ['some:tag'], []), AppendCondition::create(Query::fromItems(QueryItem::create(tags: ['some:tag']))));
-            self::fail('Expected the append to fail');
-        } catch (ConditionalAppendFailed) {
-        }
-
-        self::assertSame(0, $this->countNotifications());
-    }
-
-    #[Test]
-    public function appends_do_not_notify_listeners_by_default(): void
-    {
-        $this->skipUnlessPostgreSql();
-        $this->listenOnWaiterConnection();
-
-        $this->eventStore->append(Event::create('SomeEvent', 'a', [], []));
-
-        self::assertSame(0, $this->countNotifications());
-    }
-
-    #[Test]
-    public function appended_events_are_visible_after_a_notifying_append(): void
-    {
-        $this->skipUnlessPostgreSql();
-        $eventStore = $this->notifyingEventStore();
-
-        $eventStore->append(Event::create('SomeEvent', 'a', [], []));
-
-        $otherConnection = $this->connect();
-        self::assertEquals(1, $otherConnection->fetchOne('SELECT COUNT(*) FROM ' . self::TABLE));
-        $otherConnection->close();
-    }
-
-    #[Test]
-    public function uses_notifications_only_on_postgresql_with_notifications_enabled(): void
-    {
-        $isPostgreSql = $this->connection->getDatabasePlatform() instanceof PostgreSQLPlatform;
-
-        self::assertInstanceOf($isPostgreSql ? PostgresNotificationWaiter::class : PollingWaiter::class, $this->notifyingEventStore()->createWaiter($this->waiterConnection));
-        self::assertInstanceOf(PollingWaiter::class, $this->eventStore->createWaiter($this->waiterConnection));
-    }
-
-    #[Test]
-    public function wakes_up_immediately_when_notified_while_blocked(): void
-    {
-        $this->skipUnlessPostgreSql();
-        $waiter = $this->notifyingEventStore()->createWaiter($this->waiterConnection, 60.0);
-        self::assertInstanceOf(PostgresNotificationWaiter::class, $waiter);
-        $waiter->waitForNewEvents(0.0);
-
-        $process = $this->appendInSeparateProcess();
-        $start = microtime(true);
-        $result = $waiter->waitForNewEvents(10.0);
-        $elapsed = microtime(true) - $start;
-        proc_close($process);
-
-        self::assertTrue($result);
-        self::assertGreaterThan(0.1, $elapsed);
-        self::assertLessThan(5.0, $elapsed);
-    }
-
-    #[Test]
-    public function coalesces_queued_notifications(): void
-    {
-        $this->skipUnlessPostgreSql();
-        $eventStore = $this->notifyingEventStore();
-        $waiter = $eventStore->createWaiter($this->waiterConnection);
-        $waiter->waitForNewEvents(0.0);
-
-        $eventStore->append(Event::create('SomeEvent', 'a', [], []));
-        $eventStore->append(Event::create('SomeEvent', 'b', [], []));
-        $eventStore->append(Event::create('SomeEvent', 'c', [], []));
-        // Notifications are delivered asynchronously. One that arrives after the others were coalesced causes a spurious wake-up, which is allowed
-        usleep(300_000);
-
-        self::assertTrue($waiter->waitForNewEvents(5.0));
-        self::assertFalse($waiter->waitForNewEvents(0.1));
-    }
-
-    #[Test]
-    public function detects_events_of_writers_without_notifications_when_the_timeout_expires(): void
-    {
-        $this->skipUnlessPostgreSql();
-        $waiter = $this->notifyingEventStore()->createWaiter($this->waiterConnection);
-        $waiter->waitForNewEvents(0.0);
-
-        $this->eventStore->append(Event::create('SomeEvent', 'a', [], []));
-
-        $start = microtime(true);
-        self::assertTrue($waiter->waitForNewEvents(0.2));
-        self::assertGreaterThanOrEqual(0.19, microtime(true) - $start);
-    }
-
-    #[Test]
-    public function is_not_woken_up_by_other_event_tables(): void
-    {
-        $this->skipUnlessPostgreSql();
-        $otherEventStore = new DoctrineEventStore(DoctrineEventStoreConfiguration::create($this->connection, self::OTHER_TABLE)->withNotifications());
-        $otherEventStore->setup();
-        $waiter = $this->notifyingEventStore()->createWaiter($this->waiterConnection);
-        $waiter->waitForNewEvents(0.0);
-
-        $otherEventStore->append(Event::create('SomeEvent', 'a', [], []));
-
-        self::assertFalse($waiter->waitForNewEvents(0.2));
-    }
-
-    #[Test]
-    public function reconnects_and_keeps_listening_after_losing_the_connection(): void
-    {
-        $this->skipUnlessPostgreSql();
-        $eventStore = $this->notifyingEventStore();
-        $waiter = $eventStore->createWaiter($this->waiterConnection, 60.0);
-        $waiter->waitForNewEvents(0.0);
-        $this->connection->fetchOne('SELECT pg_terminate_backend(?)', [$this->waiterConnection->fetchOne('SELECT pg_backend_pid()')]);
-        usleep(100_000);
-
-        self::assertTrue($waiter->waitForNewEvents(5.0));
-        self::assertFalse($waiter->waitForNewEvents(0.1));
-        $eventStore->append(Event::create('SomeEvent', 'a', [], []));
-
-        $start = microtime(true);
-        self::assertTrue($waiter->waitForNewEvents(10.0));
-        self::assertLessThan(5.0, microtime(true) - $start);
-    }
-
-    #[Test]
     public function throws_if_the_reconnect_fails_and_recovers_on_the_next_call(): void
     {
         $this->skipUnlessPostgreSql();
-        $waiter = $this->notifyingEventStore()->createWaiter($this->waiterConnection);
+        $waiter = $this->eventStore->createWaiter($this->waiterConnection);
         $waiter->waitForNewEvents(0.0);
         $this->connection->executeStatement('DROP TABLE ' . self::TABLE);
         $this->connection->fetchOne('SELECT pg_terminate_backend(?)', [$this->waiterConnection->fetchOne('SELECT pg_backend_pid()')]);
@@ -351,25 +196,6 @@ final class EventStoreWaiterTest extends TestCase
         self::assertTrue($waiter->waitForNewEvents(0.0));
     }
 
-    #[Test]
-    public function rejects_a_connection_without_pdo(): void
-    {
-        $this->skipUnlessPostgreSql();
-        if (!extension_loaded('pgsql')) {
-            self::markTestSkipped('Requires the pgsql extension');
-        }
-        $connection = DriverManager::getConnection(['driver' => 'pgsql'] + (new DsnParser())->parse($this->dsn));
-        $waiter = $this->notifyingEventStore()->createWaiter($connection);
-
-        try {
-            $this->expectException(RuntimeException::class);
-            $this->expectExceptionMessageMatches('/pdo_pgsql/');
-            $waiter->waitForNewEvents(0.0);
-        } finally {
-            $connection->close();
-        }
-    }
-
     private function skipUnlessPostgreSql(): void
     {
         if (!$this->connection->getDatabasePlatform() instanceof PostgreSQLPlatform) {
@@ -377,42 +203,19 @@ final class EventStoreWaiterTest extends TestCase
         }
     }
 
-    private function listenOnWaiterConnection(): void
-    {
-        $this->waiterConnection->executeStatement('LISTEN ' . DoctrineEventStoreConfiguration::create($this->waiterConnection, self::TABLE)->notificationChannel());
-    }
-
-    private function countNotifications(): int
-    {
-        $pdo = $this->waiterConnection->getNativeConnection();
-        self::assertInstanceOf(PDO::class, $pdo);
-        $method = $pdo instanceof Pgsql ? 'getNotify' : 'pgsqlGetNotify';
-        $count = 0;
-        while ($pdo->{$method}(PDO::FETCH_ASSOC, 200) !== false) {
-            $count++;
-        }
-        return $count;
-    }
-
     /**
      * @return resource
      */
     private function appendInSeparateProcess()
     {
-        $process = proc_open([PHP_BINARY, __DIR__ . '/append-event.php', $this->dsn, self::TABLE, 'data', 'some:tag', 'notify', '0.3'], [], $pipes);
+        $process = proc_open([PHP_BINARY, __DIR__ . '/append-event.php', $this->dsn, self::TABLE, 'data', 'some:tag', '0.3'], [], $pipes);
         self::assertIsResource($process);
         return $process;
-    }
-
-    private function notifyingEventStore(): DoctrineEventStore
-    {
-        return new DoctrineEventStore(DoctrineEventStoreConfiguration::create($this->connection, self::TABLE)->withNotifications());
     }
 
     private function dropTables(): void
     {
         $this->connection->executeStatement('DROP TABLE IF EXISTS ' . self::TABLE);
-        $this->connection->executeStatement('DROP TABLE IF EXISTS ' . self::OTHER_TABLE);
     }
 
     private function connect(): Connection
