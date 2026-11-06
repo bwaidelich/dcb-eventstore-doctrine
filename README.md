@@ -288,8 +288,7 @@ $eventStore->setup();
 |---|---|---|---|---|
 | Tested versions | 16, 17 | 8.0, 8.4 | 10.11, 11.4 | |
 | `append()`, `read()`, `head()` | ✓ | ✓ | ✓ | ✓ |
-| Waiting for new events | Instant or polling | Polling | Polling | Polling |
-| [Partitioned reads](docs/advanced.md#partitioned-reads) | ✓ | ✓ | ✓ | |
+| Waiting for new events | ✓ | ✓ | ✓ | ✓ |
 
 Doctrine DBAL 3.6+ and 4 are supported.
 
@@ -303,10 +302,8 @@ use Doctrine\DBAL\Tools\DsnParser;
 use Wwwision\DCBEventStore\Query\Query;
 use Wwwision\DCBEventStore\ReadOptions;
 use Wwwision\DCBEventStoreDoctrine\DoctrineEventStore;
-use Wwwision\DCBEventStoreDoctrine\DoctrineEventStoreConfiguration;
 
-$config = DoctrineEventStoreConfiguration::create($connection, 'events')->withNotifications();
-$eventStore = new DoctrineEventStore($config);
+$eventStore = DoctrineEventStore::create($connection, 'events');
 
 // The waiter needs a connection of its own
 $waiterConnection = DriverManager::getConnection((new DsnParser())->parse($dsn));
@@ -322,9 +319,9 @@ while (true) {
 }
 ```
 
-On PostgreSQL, the worker wakes up right away if `withNotifications()` is enabled for writers and workers, which slows down appends. Everywhere else, the waiter polls once per second. Before using this in production, see [Waiting for new events](docs/advanced.md#waiting-for-new-events).
+The waiter checks for new events once per second. Before using this in production, see [Waiting for new events](docs/advanced.md#waiting-for-new-events).
 
-To distribute a projection across several workers, see [Partitioned reads](docs/advanced.md#partitioned-reads).
+To distribute a projection across several workers, see [Multiple workers for one projection](docs/advanced.md#multiple-workers-for-one-projection).
 
 ## Good to know
 
@@ -336,7 +333,7 @@ To distribute a projection across several workers, see [Partitioned reads](docs/
 
 ## Further reading
 
-- [Advanced topics](docs/advanced.md): event ordering, partitioned reads, exceptions, waiting for new events
+- [Advanced topics](docs/advanced.md): event ordering, multiple workers, exceptions, waiting for new events
 - [Upgrading to 7.0](docs/upgrading.md)
 - [Decisions](docs/decisions.md): why things are the way they are, including measurements
 - [wwwision/dcb-eventstore](https://github.com/bwaidelich/dcb-eventstore): the core package with its full API

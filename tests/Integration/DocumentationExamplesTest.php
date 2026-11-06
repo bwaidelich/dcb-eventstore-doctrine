@@ -7,7 +7,6 @@ namespace Wwwision\DCBEventStoreDoctrine\Tests\Integration;
 use Doctrine\DBAL\Configuration;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\DriverManager;
-use Doctrine\DBAL\Platforms\SQLitePlatform;
 use Doctrine\DBAL\Schema\DefaultSchemaManagerFactory;
 use Doctrine\DBAL\Tools\DsnParser;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -21,9 +20,9 @@ use Wwwision\DCBEventStore\Event\Tag;
 use Wwwision\DCBEventStore\Query\Query;
 use Wwwision\DCBEventStore\SequencedEvent\SequencedEvent;
 use Wwwision\DCBEventStoreDoctrine\DoctrineEventStore;
-use Wwwision\DCBEventStoreDoctrine\TagPartition;
 
 use function array_map;
+use function crc32;
 use function escapeshellarg;
 use function exec;
 use function extract;
@@ -55,7 +54,6 @@ use const PREG_SET_ORDER;
  * All connections are replaced by one for the database under test, and worker loops end after two rounds
  */
 #[CoversClass(DoctrineEventStore::class)]
-#[CoversClass(TagPartition::class)]
 final class DocumentationExamplesTest extends TestCase
 {
     private const TABLE = 'dcb_documentation_test';
@@ -131,13 +129,10 @@ final class DocumentationExamplesTest extends TestCase
     }
 
     #[Test]
-    public function partition_example_handles_the_tags_of_its_partition(): void
+    public function multiple_workers_example_handles_the_tags_of_its_partition(): void
     {
         $eventStore = DoctrineEventStore::create($this->connection, self::TABLE);
         $eventStore->setup();
-        if ($this->connection->getDatabasePlatform() instanceof SQLitePlatform) {
-            self::markTestSkipped('Partitioned reads are not supported on SQLite');
-        }
         $events = [Event::create('SomeEvent', 'without matching tag', 'other:1')];
         for ($i = 0; $i < 100; $i++) {
             $events[] = Event::create('SomeEvent', 'data', "cart:$i");
@@ -148,10 +143,9 @@ final class DocumentationExamplesTest extends TestCase
         self::assertCount(1, $blocks);
         [, $scope] = self::execute($blocks[0]['code'], ['eventStore' => $eventStore]);
 
-        $partition = TagPartition::create(prefix: 'cart:', partitions: 8, partition: 3);
         $expected = [];
         for ($i = 0; $i < 100; $i++) {
-            if ($partition->contains(Tag::fromString("cart:$i"))) {
+            if (crc32("cart:$i") % 8 === 3) {
                 $expected[] = "cart:$i";
             }
         }

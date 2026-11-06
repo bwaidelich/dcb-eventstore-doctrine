@@ -5,7 +5,7 @@ declare(strict_types=1);
 /**
  * Appends a single event from a separate process, so that a test can observe an append blocking on another one.
  *
- * Usage: php append-event.php <dsn> <table> <data> <tag> [notify] [delay in seconds]
+ * Usage: php append-event.php <dsn> <table> <data> <tag> [delay in seconds]
  */
 
 use Doctrine\DBAL\Configuration;
@@ -22,16 +22,11 @@ require __DIR__ . '/../../vendor/autoload.php';
 $arguments = $_SERVER['argv'] ?? null;
 Assert::isList($arguments);
 Assert::allString($arguments);
-Assert::inArray(count($arguments), [5, 7]);
+Assert::inArray(count($arguments), [5, 6]);
 [, $dsn, $table, $data, $tag] = $arguments;
-$notify = ($arguments[5] ?? null) === 'notify';
-usleep((int) (((float) ($arguments[6] ?? 0)) * 1E6));
+usleep((int) (((float) ($arguments[5] ?? 0)) * 1E6));
 
 $config = new Configuration();
 $config->setSchemaManagerFactory(new DefaultSchemaManagerFactory());
 $connection = DriverManager::getConnection((new DsnParser())->parse($dsn), $config);
-$eventStoreConfiguration = DoctrineEventStoreConfiguration::create($connection, $table);
-if ($notify) {
-    $eventStoreConfiguration = $eventStoreConfiguration->withNotifications();
-}
-(new DoctrineEventStore($eventStoreConfiguration))->append(Event::create('SomeEvent', $data, [$tag], []));
+(new DoctrineEventStore(DoctrineEventStoreConfiguration::create($connection, $table)))->append(Event::create('SomeEvent', $data, [$tag], []));

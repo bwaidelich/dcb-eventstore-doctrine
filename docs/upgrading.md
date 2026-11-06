@@ -14,7 +14,6 @@ Previous versions did not serialize appends on PostgreSQL:
 
 ### All platforms
 
-- **Exceptions:** `read()`, `readPartition()`, `head()` and the iteration over read events throw a `RuntimeException` instead of DBAL exceptions. Code that catches a specific DBAL exception has to inspect `getPrevious()` instead, see [Exceptions](advanced.md#exceptions).
-- **Internal API:** `connection`, `platform`, `notificationChannel()`, `createUniqueParameterName()`, `resetUniqueParameterCount()`, `isPostgreSQL()`, `isSQLite()` and `isMySQL()` of `DoctrineEventStoreConfiguration` are now `@internal`. They still work, but can change without a major version.
+- **Exceptions:** `read()`, `head()` and the iteration over read events throw a `RuntimeException` instead of DBAL exceptions. Code that catches a specific DBAL exception has to inspect `getPrevious()` instead, see [Exceptions](advanced.md#exceptions).
+- **Internal API:** `connection`, `platform`, `createUniqueParameterName()`, `resetUniqueParameterCount()`, `isPostgreSQL()`, `isSQLite()` and `isMySQL()` of `DoctrineEventStoreConfiguration` are now `@internal`. They still work, but can change without a major version.
 - **Index names:** index names now contain a hash of the table name. Existing tables work without a change. Running `setup()` once renames their indexes, and the GIN index on PostgreSQL isn't rebuilt.
-- **Dependencies:** `ext-pdo` is now required explicitly.
