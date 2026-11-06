@@ -18,6 +18,7 @@ use Doctrine\DBAL\Driver\Result;
 use Doctrine\DBAL\DriverManager;
 use Doctrine\DBAL\Exception as DbalException;
 use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
+use Doctrine\DBAL\Platforms\SQLitePlatform;
 use Doctrine\DBAL\Schema\DefaultSchemaManagerFactory;
 use Doctrine\DBAL\Tools\DsnParser;
 use JsonException;
@@ -28,6 +29,7 @@ use RuntimeException;
 use Wwwision\DCBEventStore\Event\Event;
 use Wwwision\DCBEventStore\Query\Query;
 use Wwwision\DCBEventStoreDoctrine\DoctrineEventStore;
+use Wwwision\DCBEventStoreDoctrine\TagPartition;
 
 use function getenv;
 use function is_string;
@@ -70,6 +72,17 @@ final class DatabaseExceptionTest extends TestCase
         $this->dropTable();
 
         self::assertWrapsDatabaseException(fn() => iterator_to_array($this->eventStore->read(Query::all())));
+    }
+
+    #[Test]
+    public function read_partition_wraps_database_exceptions(): void
+    {
+        if ($this->connection->getDatabasePlatform() instanceof SQLitePlatform) {
+            self::markTestSkipped('Partitioned reads are not supported on SQLite');
+        }
+        $this->dropTable();
+
+        self::assertWrapsDatabaseException(fn() => iterator_to_array($this->eventStore->readPartition(TagPartition::create('some:', 2, 0), Query::all())));
     }
 
     #[Test]
