@@ -17,6 +17,7 @@ use Doctrine\DBAL\Schema\Schema;
 use Doctrine\DBAL\Schema\Table;
 use Doctrine\DBAL\Types\Type;
 use Doctrine\DBAL\Types\Types;
+use InvalidArgumentException;
 use JsonException;
 use RuntimeException;
 use Webmozart\Assert\Assert;
@@ -24,6 +25,7 @@ use Wwwision\DCBEventStore\AppendCondition\AppendCondition;
 use Wwwision\DCBEventStore\Event\Event;
 use Wwwision\DCBEventStore\Event\Events;
 use Wwwision\DCBEventStore\Event\EventType;
+use Wwwision\DCBEventStore\Event\Tag;
 use Wwwision\DCBEventStore\EventStore;
 use Wwwision\DCBEventStore\Exceptions\ConditionalAppendFailed;
 use Wwwision\DCBEventStore\Query\Query;
@@ -39,6 +41,7 @@ use function implode;
 use function iterator_to_array;
 use function json_encode;
 use function sprintf;
+use function strlen;
 use function strrpos;
 use function substr;
 
@@ -180,6 +183,63 @@ final class DoctrineEventStore implements EventStore
     }
 
     /**
+     * Returns the events matching the specified {@see Query} that have a tag belonging to the specified {@see TagPartition}
+     *
+     * An event with multiple matching tags is returned by every partition that owns one of them, an event without a matching tag by none.
+     *
+     * To avoid rescanning positions without matching events, specify {@see self::head()} as $until. A worker can then continue after
+     * the last event if the batch reached the limit, or after $until otherwise. See docs/advanced.md
+     *
+     * @param SequencePosition|null $until If specified, only events up to and including this position will be returned. Can't be combined with reading backwards
+     * @throws RuntimeException if the database platform doesn't support partitioned reads (SQLite), or if the database fails or returns invalid JSON, here or while iterating over the returned events
+     * @throws InvalidArgumentException if the $query contains items with "onlyLastEvent" or if $until is combined with reading backwards
+     */
+    public function readPartition(TagPartition $partition, Query $query, ReadOptions|null $options = null, SequencePosition|null $until = null): SequencedEvents
+    {
+        if ($this->config->isSQLite()) {
+            throw new RuntimeException('Partitioned reads are not supported on SQLite, because it has no built-in hash function', 1793664001);
+        }
+        foreach ($query as $queryItem) {
+            if ($queryItem->onlyLastEvent) {
+                throw new InvalidArgumentException('Partitioned reads do not support query items with "onlyLastEvent", because the last event is determined before the partition is applied', 1793664002);
+            }
+        }
+        if ($until !== null && $options !== null && $options->backwards) {
+            throw new InvalidArgumentException('Partitioned reads do not support "until" when reading backwards', 1793664003);
+        }
+        try {
+            $queryBuilder = $this->createReadQueryBuilder($options);
+            $this->addDcbQueryWhereConstraints($queryBuilder, $query);
+            if ($until !== null) {
+                $queryBuilder->andWhere('events.sequence_number <= :until')->setParameter('until', $until->value, ParameterType::INTEGER);
+            }
+            $queryBuilder
+                ->andWhere($this->partitionConstraint())
+                ->setParameter('partitionPrefix', $partition->prefix)
+                ->setParameter('partitions', $partition->partitions, ParameterType::INTEGER)
+                ->setParameter('partition', $partition->partition, ParameterType::INTEGER);
+            if (!$this->config->isPostgreSQL()) {
+                $queryBuilder->setParameter('partitionPrefixLength', strlen($partition->prefix), ParameterType::INTEGER);
+            }
+            return self::fetchSequencedEvents($queryBuilder);
+        } catch (DbalException|JsonException $e) {
+            throw self::readFailed($e);
+        }
+    }
+
+    /**
+     * Has to implement the same calculation as {@see TagPartition::contains()}
+     */
+    private function partitionConstraint(): string
+    {
+        if ($this->config->isPostgreSQL()) {
+            return "EXISTS (SELECT 1 FROM jsonb_array_elements_text(events.tags) partition_tags(tag) WHERE starts_with(partition_tags.tag, :partitionPrefix::text) AND ('x' || substr(encode(sha256(convert_to(partition_tags.tag, 'UTF8')), 'hex'), 1, 8))::bit(32)::bigint % :partitions::bigint = :partition::bigint)";
+        }
+        // This is not an EXISTS on purpose: MySQL 8 turns that into a semi-join that evaluates JSON_TABLE before the table it depends on and returns no rows
+        return "(SELECT 1 FROM JSON_TABLE(events.tags, '$[*]' COLUMNS (tag VARCHAR(" . Tag::LENGTH_MAX . ") PATH '$')) partition_tags WHERE CAST(LEFT(partition_tags.tag, :partitionPrefixLength) AS BINARY) = CAST(:partitionPrefix AS BINARY) AND CAST(CONV(SUBSTR(SHA2(partition_tags.tag, 256), 1, 8), 16, 10) AS UNSIGNED) % :partitions = :partition LIMIT 1) IS NOT NULL";
+    }
+
+    /**
      * A query for one event type can walk the index on (type, sequence_number) in the requested order, so it doesn't need a derived table.
      * This doesn't apply to other queries: A database would walk the primary key instead if the filter is expected to match soon,
      * and scan the whole table if the matching events are clustered somewhere else in the log. See docs/decisions.md
@@ -262,11 +322,15 @@ final class DoctrineEventStore implements EventStore
      * Creates a waiter that lets an idle worker block until there might be new events
      *
      * @param Connection $dedicatedConnection Must not be used for anything else
-     * @param float $pollIntervalSeconds The interval in which the head of the event store is checked
+     * @param float $pollIntervalSeconds Only applies if the waiter can't be notified by the database
      */
     public function createWaiter(Connection $dedicatedConnection, float $pollIntervalSeconds = 1.0): EventStoreWaiter
     {
-        return new PollingWaiter(DoctrineEventStoreConfiguration::create($dedicatedConnection, $this->config->eventTableName), $pollIntervalSeconds);
+        $config = DoctrineEventStoreConfiguration::create($dedicatedConnection, $this->config->eventTableName);
+        if ($this->config->notificationsEnabled && $this->config->isPostgreSQL()) {
+            return new PostgresNotificationWaiter($config);
+        }
+        return new PollingWaiter($config, $pollIntervalSeconds);
     }
 
     public function append(Events|Event $events, AppendCondition|null $condition = null): void
@@ -360,7 +424,9 @@ final class DoctrineEventStore implements EventStore
                 }
                 $affectedRows = (int) $this->config->connection->executeStatement($statement, $parameters, $parameterTypes);
                 if ($transactionStarted) {
-                    $this->config->connection->executeStatement('COMMIT');
+                    // A single statement doesn't add a round trip while the lock is held. It is delivered on commit only. See docs/decisions.md
+                    $notify = $this->config->notificationsEnabled && $affectedRows > 0;
+                    $this->config->connection->executeStatement($notify ? "SELECT pg_notify('{$this->config->notificationChannel()}', ''); COMMIT" : 'COMMIT');
                     $transactionStarted = false;
                 }
                 return $affectedRows;

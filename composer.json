@@ -21,6 +21,7 @@
   ],
   "require": {
     "php": ">=8.3",
+    "ext-pdo": "*",
     "ramsey/uuid": "^4.7",
     "psr/clock": "^1",
     "webmozart/assert": "^1.11 || ^2",
