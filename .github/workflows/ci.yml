@@ -20,7 +20,8 @@ jobs:
       matrix:
         php-version:
           - '8.3'
-          - 'latest'
+          - '8.4'
+          - '8.5'
         dependencies:
           - 'lowest'
           - 'highest'
@@ -58,12 +59,12 @@ jobs:
 
         exclude:
           # doctrine/dbal 3.x leads to deprecation warnings on PHP 8.5+, so we skip it for now
-          - php-version: 'latest'
+          - php-version: '8.5'
             dependencies: 'lowest'
             database:
               image: 'postgres:16'
 
-          - php-version: 'latest'
+          - php-version: '8.5'
             dependencies: 'lowest'
             database:
               image: 'postgres:17'
@@ -135,14 +136,15 @@ jobs:
       matrix:
         php-version:
           - '8.3'
-          - 'latest'
+          - '8.4'
+          - '8.5'
         dependencies:
           - 'lowest'
           - 'highest'
 
         exclude:
           # doctrine/dbal 3.x leads to deprecation warnings on PHP 8.5+, so we skip it for now
-          - php-version: 'latest'
+          - php-version: '8.5'
             dependencies: 'lowest'
 
     steps:
@@ -186,7 +188,7 @@ jobs:
       matrix:
         php-version:
           - '8.3'
-          - 'latest'
+          - '8.5'
 
     steps:
       - name: Setup PHP
